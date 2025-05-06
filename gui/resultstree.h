@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,11 @@
 #define RESULTSTREE_H
 
 #include "showtypes.h"
+#include "checkers.h"
+
+#include <cstdint>
+#include <map>
+#include <string>
 
 #include <QObject>
 #include <QStandardItemModel>
@@ -36,10 +41,8 @@ class QModelIndex;
 class QWidget;
 class QItemSelectionModel;
 class ThreadHandler;
-class QContextMenuEvent;
-class QKeyEvent;
 class QSettings;
-enum class Severity;
+enum class Severity : std::uint8_t;
 
 /// @addtogroup GUI
 /// @{
@@ -134,7 +137,7 @@ public:
      * @return Directory containing source files
      */
 
-    const QString& getCheckDirectory();
+    const QString& getCheckDirectory() const;
 
     /**
      * @brief Check if there are any visible results in view.
@@ -183,6 +186,8 @@ public:
     ShowTypes mShowSeverities;
 
     void keyPressEvent(QKeyEvent *event) override;
+
+    void setReportType(ReportType reportType);
 
 signals:
     /**
@@ -373,7 +378,7 @@ protected:
      */
     QStandardItem *addBacktraceFiles(QStandardItem *parent,
                                      const ErrorLine &item,
-                                     const bool hide,
+                                     bool hide,
                                      const QString &icon,
                                      bool childOfMessage);
 
@@ -516,6 +521,10 @@ private:
     /** @brief Convert GUI error item into data error item */
     void readErrorItem(const QStandardItem *error, ErrorItem *item) const;
 
+    bool isCertReport() const;
+
+    bool isAutosarMisraReport() const;
+
     QStringList mHiddenMessageId;
 
     QItemSelectionModel* mSelectionModel{};
@@ -523,6 +532,10 @@ private:
 
     bool mShowCppcheck = true;
     bool mShowClang = true;
+
+    ReportType mReportType = ReportType::normal;
+
+    std::map<std::string, std::string> mGuideline;
 };
 /// @}
 #endif // RESULTSTREE_H

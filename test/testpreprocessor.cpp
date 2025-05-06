@@ -26,6 +26,7 @@
 #include "preprocessor.h"
 #include "settings.h"
 #include "suppressions.h"
+#include "tokenlist.h"
 #include "fixture.h"
 #include "helpers.h"
 
@@ -34,7 +35,9 @@
 #include <map>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <simplecpp.h>
@@ -45,32 +48,53 @@ class TestPreprocessor : public TestFixture {
 public:
     TestPreprocessor() : TestFixture("TestPreprocessor") {}
 
-    class OurPreprocessor : public Preprocessor {
-    public:
-
-        static std::string expandMacros(const char code[], ErrorLogger *errorLogger = nullptr) {
-            std::istringstream istr(code);
-            simplecpp::OutputList outputList;
-            std::vector<std::string> files;
-            const simplecpp::TokenList tokens1 = simplecpp::TokenList(istr, files, "file.cpp", &outputList);
-            std::map<std::string, simplecpp::TokenList*> filedata;
-            simplecpp::TokenList tokens2(files);
-            simplecpp::preprocess(tokens2, tokens1, files, filedata, simplecpp::DUI(), &outputList);
-
-            if (errorLogger) {
-                const Settings settings;
-                Preprocessor p(settings, *errorLogger);
-                p.reportOutput(outputList, true);
-            }
-
-            return tokens2.stringify();
-        }
-    };
-
 private:
+    std::string expandMacros(const char code[], ErrorLogger &errorLogger) const {
+        std::istringstream istr(code);
+        simplecpp::OutputList outputList;
+        std::vector<std::string> files;
+        const simplecpp::TokenList tokens1 = simplecpp::TokenList(istr, files, "file.cpp", &outputList);
+        Preprocessor p(settingsDefault, errorLogger);
+        simplecpp::TokenList tokens2 = p.preprocess(tokens1, "", files, true);
+        p.reportOutput(outputList, true);
+        return tokens2.stringify();
+    }
+
+    static void preprocess(const char code[], std::vector<std::string> &files, const std::string& file0, TokenList& tokenlist, const simplecpp::DUI& dui)
+    {
+        if (!files.empty())
+            throw std::runtime_error("file list not empty");
+
+        if (tokenlist.front())
+            throw std::runtime_error("token list not empty");
+
+        std::istringstream istr(code);
+        const simplecpp::TokenList tokens1(istr, files, file0);
+
+        // Preprocess..
+        simplecpp::TokenList tokens2(files);
+        std::map<std::string, simplecpp::TokenList*> filedata;
+        // TODO: provide and handle outputList
+        simplecpp::preprocess(tokens2, tokens1, files, filedata, dui);
+
+        // Tokenizer..
+        tokenlist.createTokens(std::move(tokens2));
+    }
+
+    std::vector<RemarkComment> getRemarkComments(const char code[], ErrorLogger& errorLogger) const
+    {
+        std::vector<std::string> files;
+        std::istringstream istr(code);
+        const simplecpp::TokenList tokens1(istr, files, "test.cpp");
+
+        const Preprocessor preprocessor(settingsDefault, errorLogger);
+        return preprocessor.getRemarkComments(tokens1);
+    }
+
     const Settings settings0 = settingsBuilder().severity(Severity::information).build();
 
     void run() override {
+        mNewTemplate = true;
 
         // The bug that started the whole work with the new preprocessor
         TEST_CASE(Bug2190219);
@@ -199,6 +223,12 @@ private:
         // inline suppression, missingInclude/missingIncludeSystem
         TEST_CASE(inline_suppressions);
 
+        // remark comment
+        TEST_CASE(remarkComment1);
+        TEST_CASE(remarkComment2);
+        TEST_CASE(remarkComment3);
+        TEST_CASE(remarkComment4);
+
         // Using -D to predefine symbols
         TEST_CASE(predefine1);
         TEST_CASE(predefine2);
@@ -259,6 +289,10 @@ private:
         TEST_CASE(testMissingIncludeCheckConfig);
 
         TEST_CASE(limitsDefines);
+
+        TEST_CASE(hashCalculation);
+
+        TEST_CASE(standard);
     }
 
     std::string getConfigsStr(const char filedata[], const char *arg = nullptr) {
@@ -277,6 +311,15 @@ private:
         for (const std::string & config : configs)
             ret += config + '\n';
         return ret;
+    }
+
+    std::size_t getHash(const char filedata[]) {
+        Preprocessor preprocessor(settingsDefault, *this);
+        std::vector<std::string> files;
+        std::istringstream istr(filedata);
+        simplecpp::TokenList tokens(istr,files);
+        tokens.removeComments();
+        return preprocessor.calculateHash(tokens, "");
     }
 
     void Bug2190219() {
@@ -330,8 +373,8 @@ private:
     void error3() {
         const auto settings = dinit(Settings, $.userDefines = "__cplusplus");
         const std::string code("#error hello world!\n");
-        PreprocessorHelper::getcode(settings, *this, code, "X", "test.c");
-        ASSERT_EQUALS("[test.c:1]: (error) #error hello world!\n", errout_str());
+        (void)PreprocessorHelper::getcode(settings, *this, code, "X", "test.c");
+        ASSERT_EQUALS("[test.c:1:0]: (error) #error hello world! [preprocessorErrorDirective]\n", errout_str());
     }
 
     // Ticket #2919 - wrong filename reported for #error
@@ -340,16 +383,16 @@ private:
         {
             const auto settings = dinit(Settings, $.userDefines = "TEST");
             const std::string code("#file \"ab.h\"\n#error hello world!\n#endfile");
-            PreprocessorHelper::getcode(settings, *this, code, "TEST", "test.c");
-            ASSERT_EQUALS("[ab.h:1]: (error) #error hello world!\n", errout_str());
+            (void)PreprocessorHelper::getcode(settings, *this, code, "TEST", "test.c");
+            ASSERT_EQUALS("[ab.h:1:0]: (error) #error hello world! [preprocessorErrorDirective]\n", errout_str());
         }
 
         // After including a file
         {
             const auto settings = dinit(Settings, $.userDefines = "TEST");
             const std::string code("#file \"ab.h\"\n\n#endfile\n#error aaa");
-            PreprocessorHelper::getcode(settings, *this, code, "TEST", "test.c");
-            ASSERT_EQUALS("[test.c:2]: (error) #error aaa\n", errout_str());
+            (void)PreprocessorHelper::getcode(settings, *this, code, "TEST", "test.c");
+            ASSERT_EQUALS("[test.c:2:0]: (error) #error aaa [preprocessorErrorDirective]\n", errout_str());
         }
     }
 
@@ -359,7 +402,7 @@ private:
                                     $.userDefines = "TEST",
                                         $.force = true);
         const std::string code("#error hello world!\n");
-        PreprocessorHelper::getcode(settings, *this, code, "X", "test.c");
+        (void)PreprocessorHelper::getcode(settings, *this, code, "X", "test.c");
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -434,16 +477,16 @@ private:
         // preprocess code with unix32 platform..
         {
             const Settings settings = settingsBuilder().platform(Platform::Type::Unix32).build();
+            Preprocessor::setPlatformInfo(tokens, settings);
             Preprocessor preprocessor(settings, *this);
-            preprocessor.setPlatformInfo(&tokens);
             ASSERT_EQUALS("\n1", preprocessor.getcode(tokens, "", files, false));
         }
 
         // preprocess code with unix64 platform..
         {
             const Settings settings = settingsBuilder().platform(Platform::Type::Unix64).build();
+            Preprocessor::setPlatformInfo(tokens, settings);
             Preprocessor preprocessor(settings, *this);
-            preprocessor.setPlatformInfo(&tokens);
             ASSERT_EQUALS("\n\n\n2", preprocessor.getcode(tokens, "", files, false));
         }
     }
@@ -796,39 +839,39 @@ private:
         (void)PreprocessorHelper::getcode(settings0, *this, code);
     }
 
-    void macro_simple1() const {
+    void macro_simple1() {
         {
             const char filedata[] = "#define AAA(aa) f(aa)\n"
                                     "AAA(5);\n";
-            ASSERT_EQUALS("\nf ( 5 ) ;", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\nf ( 5 ) ;", expandMacros(filedata, *this));
         }
 
         {
             const char filedata[] = "#define AAA(aa) f(aa)\n"
                                     "AAA (5);\n";
-            ASSERT_EQUALS("\nf ( 5 ) ;", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\nf ( 5 ) ;", expandMacros(filedata, *this));
         }
     }
 
-    void macro_simple2() const {
+    void macro_simple2() {
         const char filedata[] = "#define min(x,y) x<y?x:y\n"
                                 "min(a(),b());\n";
-        ASSERT_EQUALS("\na ( ) < b ( ) ? a ( ) : b ( ) ;", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\na ( ) < b ( ) ? a ( ) : b ( ) ;", expandMacros(filedata, *this));
     }
 
-    void macro_simple3() const {
+    void macro_simple3() {
         const char filedata[] = "#define A 4\n"
                                 "A AA\n";
-        ASSERT_EQUALS("\n4 AA", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\n4 AA", expandMacros(filedata, *this));
     }
 
-    void macro_simple4() const {
+    void macro_simple4() {
         const char filedata[] = "#define TEMP_1 if( temp > 0 ) return 1;\n"
                                 "TEMP_1\n";
-        ASSERT_EQUALS("\nif ( temp > 0 ) return 1 ;", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\nif ( temp > 0 ) return 1 ;", expandMacros(filedata, *this));
     }
 
-    void macro_simple5() const {
+    void macro_simple5() {
         const char filedata[] = "#define ABC if( temp > 0 ) return 1;\n"
                                 "\n"
                                 "void foo()\n"
@@ -836,132 +879,132 @@ private:
                                 "    int temp = 0;\n"
                                 "    ABC\n"
                                 "}\n";
-        ASSERT_EQUALS("\n\nvoid foo ( )\n{\nint temp = 0 ;\nif ( temp > 0 ) return 1 ;\n}", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\n\nvoid foo ( )\n{\nint temp = 0 ;\nif ( temp > 0 ) return 1 ;\n}", expandMacros(filedata, *this));
     }
 
-    void macro_simple6() const {
+    void macro_simple6() {
         const char filedata[] = "#define ABC (a+b+c)\n"
                                 "ABC\n";
-        ASSERT_EQUALS("\n( a + b + c )", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\n( a + b + c )", expandMacros(filedata, *this));
     }
 
-    void macro_simple7() const {
+    void macro_simple7() {
         const char filedata[] = "#define ABC(str) str\n"
                                 "ABC(\"(\")\n";
-        ASSERT_EQUALS("\n\"(\"", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\n\"(\"", expandMacros(filedata, *this));
     }
 
-    void macro_simple8() const {
+    void macro_simple8() {
         const char filedata[] = "#define ABC 123\n"
                                 "#define ABCD 1234\n"
                                 "ABC ABCD\n";
-        ASSERT_EQUALS("\n\n123 1234", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\n\n123 1234", expandMacros(filedata, *this));
     }
 
-    void macro_simple9() const {
+    void macro_simple9() {
         const char filedata[] = "#define ABC(a) f(a)\n"
                                 "ABC( \"\\\"\" );\n"
                                 "ABC( \"g\" );\n";
-        ASSERT_EQUALS("\nf ( \"\\\"\" ) ;\nf ( \"g\" ) ;", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\nf ( \"\\\"\" ) ;\nf ( \"g\" ) ;", expandMacros(filedata, *this));
     }
 
-    void macro_simple10() const {
+    void macro_simple10() {
         const char filedata[] = "#define ABC(t) t x\n"
                                 "ABC(unsigned long);\n";
-        ASSERT_EQUALS("\nunsigned long x ;", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\nunsigned long x ;", expandMacros(filedata, *this));
     }
 
-    void macro_simple11() const {
+    void macro_simple11() {
         const char filedata[] = "#define ABC(x) delete x\n"
                                 "ABC(a);\n";
-        ASSERT_EQUALS("\ndelete a ;", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\ndelete a ;", expandMacros(filedata, *this));
     }
 
-    void macro_simple12() const {
+    void macro_simple12() {
         const char filedata[] = "#define AB ab.AB\n"
                                 "AB.CD\n";
-        ASSERT_EQUALS("\nab . AB . CD", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\nab . AB . CD", expandMacros(filedata, *this));
     }
 
-    void macro_simple13() const {
+    void macro_simple13() {
         const char filedata[] = "#define TRACE(x)\n"
                                 "TRACE(;if(a))\n";
-        ASSERT_EQUALS("", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("", expandMacros(filedata, *this));
     }
 
-    void macro_simple14() const {
+    void macro_simple14() {
         const char filedata[] = "#define A \"  a  \"\n"
                                 "printf(A);\n";
-        ASSERT_EQUALS("\nprintf ( \"  a  \" ) ;", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\nprintf ( \"  a  \" ) ;", expandMacros(filedata, *this));
     }
 
-    void macro_simple15() const {
+    void macro_simple15() {
         const char filedata[] = "#define FOO\"foo\"\n"
                                 "FOO\n";
-        ASSERT_EQUALS("\n\"foo\"", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\n\"foo\"", expandMacros(filedata, *this));
     }
 
-    void macro_simple16() const {  // # 4703
+    void macro_simple16() {  // # 4703
         const char filedata[] = "#define MACRO( A, B, C ) class A##B##C##Creator {};\n"
                                 "MACRO( B\t, U , G )";
-        ASSERT_EQUALS("\nclass BUGCreator { } ;", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\nclass BUGCreator { } ;", expandMacros(filedata, *this));
     }
 
-    void macro_simple17() const {  // # 5074 - the Token::isExpandedMacro() doesn't always indicate properly if token comes from macro
+    void macro_simple17() {  // # 5074 - the Token::isExpandedMacro() doesn't always indicate properly if token comes from macro
         // It would probably be OK if the generated code was
         // "\n123+$123" since the first 123 comes from the source code
         const char filedata[] = "#define MACRO(A) A+123\n"
                                 "MACRO(123)";
-        ASSERT_EQUALS("\n123 + 123", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\n123 + 123", expandMacros(filedata, *this));
     }
 
-    void macro_simple18() const {  // (1e-7)
+    void macro_simple18() {  // (1e-7)
         const char filedata1[] = "#define A (1e-7)\n"
                                  "a=A;";
-        ASSERT_EQUALS("\na = ( 1e-7 ) ;", OurPreprocessor::expandMacros(filedata1));
+        ASSERT_EQUALS("\na = ( 1e-7 ) ;", expandMacros(filedata1, *this));
 
         const char filedata2[] = "#define A (1E-7)\n"
                                  "a=A;";
-        ASSERT_EQUALS("\na = ( 1E-7 ) ;", OurPreprocessor::expandMacros(filedata2));
+        ASSERT_EQUALS("\na = ( 1E-7 ) ;", expandMacros(filedata2, *this));
 
         const char filedata3[] = "#define A (1e+7)\n"
                                  "a=A;";
-        ASSERT_EQUALS("\na = ( 1e+7 ) ;", OurPreprocessor::expandMacros(filedata3));
+        ASSERT_EQUALS("\na = ( 1e+7 ) ;", expandMacros(filedata3, *this));
 
         const char filedata4[] = "#define A (1.e+7)\n"
                                  "a=A;";
-        ASSERT_EQUALS("\na = ( 1.e+7 ) ;", OurPreprocessor::expandMacros(filedata4));
+        ASSERT_EQUALS("\na = ( 1.e+7 ) ;", expandMacros(filedata4, *this));
 
         const char filedata5[] = "#define A (1.7f)\n"
                                  "a=A;";
-        ASSERT_EQUALS("\na = ( 1.7f ) ;", OurPreprocessor::expandMacros(filedata5));
+        ASSERT_EQUALS("\na = ( 1.7f ) ;", expandMacros(filedata5, *this));
 
         const char filedata6[] = "#define A (.1)\n"
                                  "a=A;";
-        ASSERT_EQUALS("\na = ( .1 ) ;", OurPreprocessor::expandMacros(filedata6));
+        ASSERT_EQUALS("\na = ( .1 ) ;", expandMacros(filedata6, *this));
 
         const char filedata7[] = "#define A (1.)\n"
                                  "a=A;";
-        ASSERT_EQUALS("\na = ( 1. ) ;", OurPreprocessor::expandMacros(filedata7));
+        ASSERT_EQUALS("\na = ( 1. ) ;", expandMacros(filedata7, *this));
 
         const char filedata8[] = "#define A (8.0E+007)\n"
                                  "a=A;";
-        ASSERT_EQUALS("\na = ( 8.0E+007 ) ;", OurPreprocessor::expandMacros(filedata8));
+        ASSERT_EQUALS("\na = ( 8.0E+007 ) ;", expandMacros(filedata8, *this));
     }
 
-    void macroInMacro1() const {
+    void macroInMacro1() {
         {
             const char filedata[] = "#define A(m) long n = m; n++;\n"
                                     "#define B(n) A(n)\n"
                                     "B(0)\n";
-            ASSERT_EQUALS("\n\nlong n = 0 ; n ++ ;", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\n\nlong n = 0 ; n ++ ;", expandMacros(filedata, *this));
         }
 
         {
             const char filedata[] = "#define A B\n"
                                     "#define B 3\n"
                                     "A\n";
-            ASSERT_EQUALS("\n\n3", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\n\n3", expandMacros(filedata, *this));
         }
 
         {
@@ -972,34 +1015,34 @@ private:
                                     "ABC(2,3);\n"
                                     "ABC(4,5,6);\n";
 
-            ASSERT_EQUALS("\n\n\n1 + 0 * 0 ;\n2 + 03 * 0 ;\n4 + 05 * 06 ;", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\n\n\n1 + 0 * 0 ;\n2 + 03 * 0 ;\n4 + 05 * 06 ;", expandMacros(filedata, *this));
         }
 
         {
             const char filedata[] = "#define A 4\n"
                                     "#define B(a) a,A\n"
                                     "B(2);\n";
-            ASSERT_EQUALS("\n\n2 , 4 ;", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\n\n2 , 4 ;", expandMacros(filedata, *this));
         }
 
         {
             const char filedata[] = "#define A(x) (x)\n"
                                     "#define B )A(\n"
                                     "#define C )A(\n";
-            ASSERT_EQUALS("", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("", expandMacros(filedata, *this));
         }
 
         {
             const char filedata[] = "#define A(x) (x*2)\n"
                                     "#define B A(\n"
                                     "foo B(i));\n";
-            ASSERT_EQUALS("\n\nfoo ( ( i ) * 2 ) ;", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\n\nfoo ( ( i ) * 2 ) ;", expandMacros(filedata, *this));
         }
 
         {
             const char filedata[] = "#define foo foo\n"
                                     "foo\n";
-            ASSERT_EQUALS("\nfoo", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\nfoo", expandMacros(filedata, *this));
         }
 
         {
@@ -1008,7 +1051,7 @@ private:
                 "#define A(name) void foo##name() { do { B(1, 2); }\n"
                 "A(0)\n"
                 "A(1)\n";
-            ASSERT_EQUALS("\n\nvoid foo0 ( ) { do { } while ( 0 ) ; }\nvoid foo1 ( ) { do { } while ( 0 ) ; }", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\n\nvoid foo0 ( ) { do { } while ( 0 ) ; }\nvoid foo1 ( ) { do { } while ( 0 ) ; }", expandMacros(filedata, *this));
         }
 
         {
@@ -1016,7 +1059,7 @@ private:
                 "#define B(x) (\n"
                 "#define A() B(xx)\n"
                 "B(1) A() ) )\n";
-            ASSERT_EQUALS("\n\n( ( ) )", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\n\n( ( ) )", expandMacros(filedata, *this));
         }
 
         {
@@ -1024,25 +1067,25 @@ private:
                 "#define PTR1 (\n"
                 "#define PTR2 PTR1 PTR1\n"
                 "int PTR2 PTR2 foo )))) = 0;\n";
-            ASSERT_EQUALS("\n\nint ( ( ( ( foo ) ) ) ) = 0 ;", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\n\nint ( ( ( ( foo ) ) ) ) = 0 ;", expandMacros(filedata, *this));
         }
 
         {
             const char filedata[] =
                 "#define PTR1 (\n"
                 "PTR1 PTR1\n";
-            ASSERT_EQUALS("\n( (", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\n( (", expandMacros(filedata, *this));
         }
     }
 
-    void macroInMacro2() const {
+    void macroInMacro2() {
         const char filedata[] = "#define A(x) a##x\n"
                                 "#define B 0\n"
                                 "A(B)\n";
-        ASSERT_EQUALS("\n\naB", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\n\naB", expandMacros(filedata, *this));
     }
 
-    void macro_linenumbers() const {
+    void macro_linenumbers() {
         const char filedata[] = "#define AAA(a)\n"
                                 "AAA(5\n"
                                 "\n"
@@ -1053,23 +1096,23 @@ private:
                       "\n"
                       "\n"
                       "int a ;",
-                      OurPreprocessor::expandMacros(filedata));
+                      expandMacros(filedata, *this));
     }
 
-    void macro_nopar() const {
+    void macro_nopar() {
         const char filedata[] = "#define AAA( ) { NULL }\n"
                                 "AAA()\n";
-        ASSERT_EQUALS("\n{ NULL }", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\n{ NULL }", expandMacros(filedata, *this));
     }
 
-    void macro_incdec() const {
+    void macro_incdec() {
         const char filedata[] = "#define M1(X) 1+X\n"
                                 "#define M2(X) 2-X\n"
                                 "M1(+1) M2(-1)\n";
-        ASSERT_EQUALS("\n\n1 + + 1 2 - - 1", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\n\n1 + + 1 2 - - 1", expandMacros(filedata, *this));
     }
 
-    void macro_switchCase() const {
+    void macro_switchCase() {
         {
             // Make sure "case 2" doesn't become "case2"
             const char filedata[] = "#define A( b ) "
@@ -1078,14 +1121,14 @@ private:
                                     " break; "
                                     "}\n"
                                     "A( 5 );\n";
-            ASSERT_EQUALS("\nswitch ( a ) { case 2 : break ; } ;", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\nswitch ( a ) { case 2 : break ; } ;", expandMacros(filedata, *this));
         }
 
         {
             // Make sure "2 BB" doesn't become "2BB"
             const char filedata[] = "#define A() AA : 2 BB\n"
                                     "A();\n";
-            ASSERT_EQUALS("\nAA : 2 BB ;", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\nAA : 2 BB ;", expandMacros(filedata, *this));
         }
 
         {
@@ -1093,7 +1136,7 @@ private:
                                     "#define B() A\n"
                                     "#define C( a ) B() break;\n"
                                     "{C( 2 );\n";
-            ASSERT_EQUALS("\n\n\n{ } break ; ;", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\n\n\n{ } break ; ;", expandMacros(filedata, *this));
         }
 
 
@@ -1102,7 +1145,7 @@ private:
                                     "#define B() A\n"
                                     "#define C( a ) B() _break;\n"
                                     "{C( 2 );\n";
-            ASSERT_EQUALS("\n\n\n{ } _break ; ;", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\n\n\n{ } _break ; ;", expandMacros(filedata, *this));
         }
 
 
@@ -1111,14 +1154,14 @@ private:
                                     "#define B() A\n"
                                     "#define C( a ) B() 5;\n"
                                     "{C( 2 );\n";
-            ASSERT_EQUALS("\n\n\n{ } 5 ; ;", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\n\n\n{ } 5 ; ;", expandMacros(filedata, *this));
         }
     }
 
-    void macro_NULL() const {
+    void macro_NULL() {
         // See ticket #4482 - UB when passing NULL to variadic function
-        ASSERT_EQUALS("\n0", OurPreprocessor::expandMacros("#define null 0\nnull"));
-        TODO_ASSERT_EQUALS("\nNULL", "\n0", OurPreprocessor::expandMacros("#define NULL 0\nNULL")); // TODO: Let the tokenizer handle NULL?
+        ASSERT_EQUALS("\n0", expandMacros("#define null 0\nnull", *this));
+        TODO_ASSERT_EQUALS("\nNULL", "\n0", expandMacros("#define NULL 0\nNULL", *this)); // TODO: Let the tokenizer handle NULL?
     }
 
     void string1() {
@@ -1135,19 +1178,19 @@ private:
         ASSERT_EQUALS("int main ( ) { const char * a = \"#define A\" ; }", actual.at(""));
     }
 
-    void string2() const {
+    void string2() {
         const char filedata[] = "#define AAA 123\n"
                                 "str = \"AAA\"\n";
 
         // Compare results..
-        ASSERT_EQUALS("\nstr = \"AAA\"", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\nstr = \"AAA\"", expandMacros(filedata, *this));
     }
 
-    void string3() const {
+    void string3() {
         const char filedata[] = "str(\";\");\n";
 
         // Compare results..
-        ASSERT_EQUALS("str ( \";\" ) ;", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("str ( \";\" ) ;", expandMacros(filedata, *this));
     }
 
 
@@ -1159,7 +1202,7 @@ private:
                                     "AAA\n";
 
             // Compare results..
-            ASSERT_EQUALS("\n\n\nchar b = 0 ;", OurPreprocessor::expandMacros(filedata));
+            ASSERT_EQUALS("\n\n\nchar b = 0 ;", expandMacros(filedata, *this));
         }
 
         {
@@ -1172,44 +1215,44 @@ private:
         }
     }
 
-    void defdef() const {
+    void defdef() {
         const char filedata[] = "#define AAA 123\n"
                                 "#define AAA 456\n"
                                 "#define AAA 789\n"
                                 "AAA\n";
 
         // Compare results..
-        ASSERT_EQUALS("\n\n\n789", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\n\n\n789", expandMacros(filedata, *this));
     }
 
-    void preprocessor_doublesharp() const {
+    void preprocessor_doublesharp() {
         // simple testcase without ##
         const char filedata1[] = "#define TEST(var,val) var = val\n"
                                  "TEST(foo,20);\n";
-        ASSERT_EQUALS("\nfoo = 20 ;", OurPreprocessor::expandMacros(filedata1));
+        ASSERT_EQUALS("\nfoo = 20 ;", expandMacros(filedata1, *this));
 
         // simple testcase with ##
         const char filedata2[] = "#define TEST(var,val) var##_##val = val\n"
                                  "TEST(foo,20);\n";
-        ASSERT_EQUALS("\nfoo_20 = 20 ;", OurPreprocessor::expandMacros(filedata2));
+        ASSERT_EQUALS("\nfoo_20 = 20 ;", expandMacros(filedata2, *this));
 
         // concat macroname
         const char filedata3[] = "#define ABCD 123\n"
                                  "#define A(B) A##B\n"
                                  "A(BCD)\n";
-        ASSERT_EQUALS("\n\n123", OurPreprocessor::expandMacros(filedata3));
+        ASSERT_EQUALS("\n\n123", expandMacros(filedata3, *this));
 
         // Ticket #1802 - inner ## must be expanded before outer macro
         const char filedata4[] = "#define A(B) A##B\n"
                                  "#define a(B) A(B)\n"
                                  "a(A(B))\n";
-        ASSERT_EQUALS("\n\nAAB", OurPreprocessor::expandMacros(filedata4));
+        ASSERT_EQUALS("\n\nAAB", expandMacros(filedata4, *this));
 
         // Ticket #1802 - inner ## must be expanded before outer macro
         const char filedata5[] = "#define AB(A,B) A##B\n"
                                  "#define ab(A,B) AB(A,B)\n"
                                  "ab(a,AB(b,c))\n";
-        ASSERT_EQUALS("\n\nabc", OurPreprocessor::expandMacros(filedata5));
+        ASSERT_EQUALS("\n\nabc", expandMacros(filedata5, *this));
 
         // Ticket #1802
         const char filedata6[] = "#define AB_(A,B) A ## B\n"
@@ -1217,7 +1260,7 @@ private:
                                  "#define ab(suf) AB(X, AB_(_, suf))\n"
                                  "#define X x\n"
                                  "ab(y)\n";
-        ASSERT_EQUALS("\n\n\n\nx_y", OurPreprocessor::expandMacros(filedata6));
+        ASSERT_EQUALS("\n\n\n\nx_y", expandMacros(filedata6, *this));
     }
 
 
@@ -1237,46 +1280,46 @@ private:
         ASSERT_EQUALS("int main ( )\n{\nconst char * a = \"#include <string>\" ;\nreturn 0 ;\n}", actual.at(""));
     }
 
-    void va_args_1() const {
+    void va_args_1() {
         const char filedata[] = "#define DBG(fmt...) printf(fmt)\n"
                                 "DBG(\"[0x%lx-0x%lx)\", pstart, pend);\n";
 
         // Preprocess..
-        std::string actual = OurPreprocessor::expandMacros(filedata);
+        std::string actual = expandMacros(filedata, *this);
 
         ASSERT_EQUALS("\nprintf ( \"[0x%lx-0x%lx)\" , pstart , pend ) ;", actual);
     }
     /*
-        void va_args_2() const {
+        void va_args_2() {
             const char filedata[] = "#define DBG(fmt, args...) printf(fmt, ## args)\n"
                                     "DBG(\"hello\");\n";
 
             // Preprocess..
-            std::string actual = OurPreprocessor::expandMacros(filedata);
+            std::string actual = expandMacros(filedata, *this);
 
             // invalid code ASSERT_EQUALS("\nprintf ( \"hello\" ) ;", actual);
         }
      */
-    void va_args_3() const {
+    void va_args_3() {
         const char filedata[] = "#define FRED(...) { fred(__VA_ARGS__); }\n"
                                 "FRED(123)\n";
-        ASSERT_EQUALS("\n{ fred ( 123 ) ; }", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\n{ fred ( 123 ) ; }", expandMacros(filedata, *this));
     }
 
-    void va_args_4() const {
+    void va_args_4() {
         const char filedata[] = "#define FRED(name, ...) name (__VA_ARGS__)\n"
                                 "FRED(abc, 123)\n";
-        ASSERT_EQUALS("\nabc ( 123 )", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\nabc ( 123 )", expandMacros(filedata, *this));
     }
 
-    void va_args_5() const {
+    void va_args_5() {
         const char filedata1[] = "#define A(...) #__VA_ARGS__\n"
                                  "A(123)\n";
-        ASSERT_EQUALS("\n\"123\"", OurPreprocessor::expandMacros(filedata1));
+        ASSERT_EQUALS("\n\"123\"", expandMacros(filedata1, *this));
 
         const char filedata2[] = "#define A(X,...) X(#__VA_ARGS__)\n"
                                  "A(f,123)\n";
-        ASSERT_EQUALS("\nf ( \"123\" )", OurPreprocessor::expandMacros(filedata2));
+        ASSERT_EQUALS("\nf ( \"123\" )", expandMacros(filedata2, *this));
     }
 
 
@@ -1298,52 +1341,52 @@ private:
     }
 
 
-    void stringify() const {
+    void stringify() {
         const char filedata[] = "#define STRINGIFY(x) #x\n"
                                 "STRINGIFY(abc)\n";
 
         // expand macros..
-        std::string actual = OurPreprocessor::expandMacros(filedata);
+        std::string actual = expandMacros(filedata, *this);
 
         ASSERT_EQUALS("\n\"abc\"", actual);
     }
 
-    void stringify2() const {
+    void stringify2() {
         const char filedata[] = "#define A(x) g(#x)\n"
                                 "A(abc);\n";
 
         // expand macros..
-        std::string actual = OurPreprocessor::expandMacros(filedata);
+        std::string actual = expandMacros(filedata, *this);
 
         ASSERT_EQUALS("\ng ( \"abc\" ) ;", actual);
     }
 
-    void stringify3() const {
+    void stringify3() {
         const char filedata[] = "#define A(x) g(#x)\n"
                                 "A( abc);\n";
 
         // expand macros..
-        std::string actual = OurPreprocessor::expandMacros(filedata);
+        std::string actual = expandMacros(filedata, *this);
 
         ASSERT_EQUALS("\ng ( \"abc\" ) ;", actual);
     }
 
-    void stringify4() const {
+    void stringify4() {
         const char filedata[] = "#define A(x) #x\n"
                                 "1 A(\n"
                                 "abc\n"
                                 ") 2\n";
 
         // expand macros..
-        std::string actual = OurPreprocessor::expandMacros(filedata);
+        std::string actual = expandMacros(filedata, *this);
 
         ASSERT_EQUALS("\n1 \"abc\"\n\n2", actual);
     }
 
-    void stringify5() const {
+    void stringify5() {
         const char filedata[] = "#define A(x) a(#x,x)\n"
                                 "A(foo(\"\\\"\"))\n";
-        ASSERT_EQUALS("\na ( \"foo(\\\"\\\\\\\"\\\")\" , foo ( \"\\\"\" ) )", OurPreprocessor::expandMacros(filedata));
+        ASSERT_EQUALS("\na ( \"foo(\\\"\\\\\\\"\\\")\" , foo ( \"\\\"\" ) )", expandMacros(filedata, *this));
     }
 
     void pragma() {
@@ -1422,7 +1465,7 @@ private:
             const std::map<std::string, std::string> actual = PreprocessorHelper::getcode(settings0, *this, filedata);
 
             ASSERT_EQUALS(0, actual.size());
-            ASSERT_EQUALS("[file.c:2]: (error) No pair for character ('). Can't process file. File is either invalid or unicode, which is currently not supported.\n", errout_str());
+            ASSERT_EQUALS("[file.c:2:0]: (error) No pair for character ('). Can't process file. File is either invalid or unicode, which is currently not supported. [preprocessorErrorDirective]\n", errout_str());
         }
     }
 
@@ -1434,10 +1477,10 @@ private:
                                     "#endif\n";
 
             // expand macros..
-            const std::string actual(OurPreprocessor::expandMacros(filedata, this));
+            const std::string actual(expandMacros(filedata, *this));
 
             ASSERT_EQUALS("", actual);
-            ASSERT_EQUALS("[file.cpp:3]: (error) No pair for character (\"). Can't process file. File is either invalid or unicode, which is currently not supported.\n", errout_str());
+            ASSERT_EQUALS("[file.cpp:3:0]: (error) No pair for character (\"). Can't process file. File is either invalid or unicode, which is currently not supported. [preprocessorErrorDirective]\n", errout_str());
         }
 
         {
@@ -1447,10 +1490,10 @@ private:
                                     "#endfile\n";
 
             // expand macros..
-            const std::string actual(OurPreprocessor::expandMacros(filedata, this));
+            const std::string actual(expandMacros(filedata, *this));
 
             ASSERT_EQUALS("", actual);
-            ASSERT_EQUALS("[abc.h:2]: (error) No pair for character (\"). Can't process file. File is either invalid or unicode, which is currently not supported.\n", errout_str());
+            ASSERT_EQUALS("[abc.h:2:0]: (error) No pair for character (\"). Can't process file. File is either invalid or unicode, which is currently not supported. [preprocessorErrorDirective]\n", errout_str());
         }
 
         {
@@ -1460,10 +1503,10 @@ private:
                                     "\"\n";
 
             // expand macros..
-            const std::string actual(OurPreprocessor::expandMacros(filedata, this));
+            const std::string actual(expandMacros(filedata, *this));
 
             ASSERT_EQUALS("", actual);
-            ASSERT_EQUALS("[file.cpp:2]: (error) No pair for character (\"). Can't process file. File is either invalid or unicode, which is currently not supported.\n", errout_str());
+            ASSERT_EQUALS("[file.cpp:2:0]: (error) No pair for character (\"). Can't process file. File is either invalid or unicode, which is currently not supported. [preprocessorErrorDirective]\n", errout_str());
         }
 
         {
@@ -1472,10 +1515,10 @@ private:
                                     "int a = A;\n";
 
             // expand macros..
-            const std::string actual(OurPreprocessor::expandMacros(filedata, this));
+            const std::string actual(expandMacros(filedata, *this));
 
             ASSERT_EQUALS("", actual);
-            ASSERT_EQUALS("[file.cpp:2]: (error) No pair for character (\"). Can't process file. File is either invalid or unicode, which is currently not supported.\n", errout_str());
+            ASSERT_EQUALS("[file.cpp:2:0]: (error) No pair for character (\"). Can't process file. File is either invalid or unicode, which is currently not supported. [preprocessorErrorDirective]\n", errout_str());
         }
 
         {
@@ -1489,9 +1532,9 @@ private:
                                     "}\n";
 
             // expand macros..
-            OurPreprocessor::expandMacros(filedata, this);
+            (void)expandMacros(filedata, *this);
 
-            ASSERT_EQUALS("[file.cpp:7]: (error) No pair for character (\"). Can't process file. File is either invalid or unicode, which is currently not supported.\n", errout_str());
+            ASSERT_EQUALS("[file.cpp:7:0]: (error) No pair for character (\"). Can't process file. File is either invalid or unicode, which is currently not supported. [preprocessorErrorDirective]\n", errout_str());
         }
     }
 
@@ -1544,7 +1587,7 @@ private:
         // Compare results..
         ASSERT_EQUALS(1, actual.size());
         ASSERT_EQUALS("", actual.at(""));
-        ASSERT_EQUALS("[file.c:6]: (error) failed to expand 'BC', Wrong number of parameters for macro 'BC'.\n", errout_str());
+        ASSERT_EQUALS("[file.c:6:0]: (error) failed to expand 'BC', Wrong number of parameters for macro 'BC'. [preprocessorErrorDirective]\n", errout_str());
     }
 
     void newline_in_macro() {
@@ -1682,7 +1725,7 @@ private:
             const std::map<std::string, std::string> actual = PreprocessorHelper::getcode(settings0, *this, filedata);
 
             // Compare results..
-            ASSERT_EQUALS(1, (int)actual.size());
+            ASSERT_EQUALS(1, actual.size());
             ASSERT_EQUALS("\n\n\n\nB", actual.at(""));
         }
 
@@ -1696,7 +1739,7 @@ private:
             const std::map<std::string, std::string> actual = PreprocessorHelper::getcode(settings0, *this, filedata);
 
             // Compare results..
-            ASSERT_EQUALS(1, (int)actual.size());
+            ASSERT_EQUALS(1, actual.size());
             ASSERT_EQUALS("\n\n$1", actual.at(""));
         }
 
@@ -1710,7 +1753,7 @@ private:
             const std::map<std::string, std::string> actual = PreprocessorHelper::getcode(settings0, *this, filedata);
 
             // Compare results..
-            ASSERT_EQUALS(1, (int)actual.size());
+            ASSERT_EQUALS(1, actual.size());
             ASSERT_EQUALS("\n\n$1", actual.at(""));
         }
 
@@ -1724,7 +1767,7 @@ private:
             const std::map<std::string, std::string> actual = PreprocessorHelper::getcode(settings0, *this, filedata);
 
             // Compare results..
-            ASSERT_EQUALS(1, (int)actual.size());
+            ASSERT_EQUALS(1, actual.size());
             ASSERT_EQUALS("\n\n$1", actual.at(""));
         }
 
@@ -1739,7 +1782,7 @@ private:
             const std::map<std::string, std::string> actual = PreprocessorHelper::getcode(settings0, *this, filedata);
 
             // Compare results..
-            ASSERT_EQUALS(1, (int)actual.size());
+            ASSERT_EQUALS(1, actual.size());
             ASSERT_EQUALS("\n\n\n\n$1", actual.at(""));
         }
     }
@@ -1816,7 +1859,7 @@ private:
         const std::map<std::string, std::string> actual = PreprocessorHelper::getcode(settings0, *this, filedata);
 
         // Compare results..
-        ASSERT_EQUALS(4, (int)actual.size());
+        ASSERT_EQUALS(4, actual.size());
         ASSERT(actual.find("") != actual.end());
         ASSERT(actual.find("BAR") != actual.end());
         ASSERT(actual.find("FOO") != actual.end());
@@ -1833,7 +1876,7 @@ private:
         const std::map<std::string, std::string> actual = PreprocessorHelper::getcode(settings0, *this, filedata);
 
         // Compare results..
-        ASSERT_EQUALS(1, (int)actual.size());
+        ASSERT_EQUALS(1, actual.size());
         ASSERT_EQUALS("char a [ ] = \"#endfile\" ;\nchar b [ ] = \"#endfile\" ;", actual.at(""));
     }
 
@@ -1861,12 +1904,12 @@ private:
 
     void invalid_define_1() {
         (void)PreprocessorHelper::getcode(settings0, *this, "#define =\n");
-        ASSERT_EQUALS("[file.c:1]: (error) Failed to parse #define\n", errout_str());
+        ASSERT_EQUALS("[file.c:1:0]: (error) Failed to parse #define [preprocessorErrorDirective]\n", errout_str());
     }
 
     void invalid_define_2() {  // #4036
         (void)PreprocessorHelper::getcode(settings0, *this, "#define () {(int f(x) }\n");
-        ASSERT_EQUALS("[file.c:1]: (error) Failed to parse #define\n", errout_str());
+        ASSERT_EQUALS("[file.c:1:0]: (error) Failed to parse #define [preprocessorErrorDirective]\n", errout_str());
     }
 
     void inline_suppressions() {
@@ -1879,7 +1922,7 @@ private:
                                "// cppcheck-suppress missingIncludeSystem\n"
                                "#include <missing2.h>\n");
         SuppressionList inlineSuppr;
-        PreprocessorHelper::getcode(settings, *this, code, "", "test.c", &inlineSuppr);
+        (void)PreprocessorHelper::getcode(settings, *this, code, "", "test.c", &inlineSuppr);
 
         auto suppressions = inlineSuppr.getSuppressions();
         ASSERT_EQUALS(2, suppressions.size());
@@ -1901,6 +1944,38 @@ private:
         ASSERT_EQUALS(false, suppr.matched);
 
         ignore_errout(); // we are not interested in the output
+    }
+
+    void remarkComment1() {
+        const char code[] = "// REMARK: assignment with 1\n"
+                            "x=1;\n";
+        const auto remarkComments = getRemarkComments(code, *this);
+        ASSERT_EQUALS(1, remarkComments.size());
+        ASSERT_EQUALS(2, remarkComments[0].lineNumber);
+        ASSERT_EQUALS("assignment with 1", remarkComments[0].str);
+    }
+
+    void remarkComment2() {
+        const char code[] = "x=1; ///REMARK assignment with 1\n";
+        const auto remarkComments = getRemarkComments(code, *this);
+        ASSERT_EQUALS(1, remarkComments.size());
+        ASSERT_EQUALS(1, remarkComments[0].lineNumber);
+        ASSERT_EQUALS("assignment with 1", remarkComments[0].str);
+    }
+
+    void remarkComment3() {
+        const char code[] = "/**   REMARK: assignment with 1 */\n"
+                            "x=1;\n";
+        const auto remarkComments = getRemarkComments(code, *this);
+        ASSERT_EQUALS(1, remarkComments.size());
+        ASSERT_EQUALS(2, remarkComments[0].lineNumber);
+        ASSERT_EQUALS("assignment with 1 ", remarkComments[0].str);
+    }
+
+    void remarkComment4() {
+        const char code[] = "//REMARK /";
+        const auto remarkComments = getRemarkComments(code, *this);
+        ASSERT_EQUALS(0, remarkComments.size());
     }
 
     void predefine1() {
@@ -1963,7 +2038,7 @@ private:
         const char code[] = "#elif (){\n";
         const std::string actual = PreprocessorHelper::getcode(settings0, *this, code, "TEST", "test.c");
         ASSERT_EQUALS("", actual);
-        ASSERT_EQUALS("[test.c:1]: (error) #elif without #if\n", errout_str());
+        ASSERT_EQUALS("[test.c:1:0]: (error) #elif without #if [preprocessorErrorDirective]\n", errout_str());
     }
 
     void getConfigs1() {
@@ -2212,8 +2287,8 @@ private:
         // Preprocess => don't crash..
         (void)PreprocessorHelper::getcode(settings0, *this, filedata);
         ASSERT_EQUALS(
-            "[file.c:1]: (error) Syntax error in #ifdef\n"
-            "[file.c:1]: (error) Syntax error in #ifdef\n", errout_str());
+            "[file.c:1:0]: (error) Syntax error in #ifdef [preprocessorErrorDirective]\n"
+            "[file.c:1:0]: (error) Syntax error in #ifdef [preprocessorErrorDirective]\n", errout_str());
     }
 
     void garbage() {
@@ -2228,8 +2303,8 @@ private:
     void wrongPathOnErrorDirective() {
         const auto settings = dinit(Settings, $.userDefines = "foo");
         const std::string code("#error hello world!\n");
-        PreprocessorHelper::getcode(settings, *this, code, "X", "./././test.c");
-        ASSERT_EQUALS("[test.c:1]: (error) #error hello world!\n", errout_str());
+        (void)PreprocessorHelper::getcode(settings, *this, code, "X", "./././test.c");
+        ASSERT_EQUALS("[test.c:1:0]: (error) #error hello world! [preprocessorErrorDirective]\n", errout_str());
     }
 
     // test for existing local include
@@ -2243,7 +2318,7 @@ private:
         ScopedFile header("header.h", "");
 
         std::string code("#include \"header.h\"");
-        PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
+        (void)PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
 
         ASSERT_EQUALS("", errout_str());
     }
@@ -2257,7 +2332,7 @@ private:
         setTemplateFormat("simple");
 
         std::string code("#include \"header.h\"");
-        PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
+        (void)PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
 
         ASSERT_EQUALS("test.c:1:0: information: Include file: \"header.h\" not found. [missingInclude]\n", errout_str());
     }
@@ -2273,7 +2348,7 @@ private:
         ScopedFile header("header.h", "", "inc");
 
         std::string code("#include \"header.h\"");
-        PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
+        (void)PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
 
         ASSERT_EQUALS("test.c:1:0: information: Include file: \"header.h\" not found. [missingInclude]\n", errout_str());
     }
@@ -2290,7 +2365,7 @@ private:
         ScopedFile header("header.h", "", "inc");
 
         std::string code("#include \"inc/header.h\"");
-        PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
+        (void)PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
 
         ASSERT_EQUALS("", errout_str());
     }
@@ -2307,7 +2382,7 @@ private:
         ScopedFile header("header.h", "", Path::getCurrentPath());
 
         std::string code("#include \"" + header.path() + "\"");
-        PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
+        (void)PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
 
         ASSERT_EQUALS("", errout_str());
     }
@@ -2323,7 +2398,7 @@ private:
         const std::string header = Path::join(Path::getCurrentPath(), "header.h");
 
         std::string code("#include \"" + header + "\"");
-        PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
+        (void)PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
 
         ASSERT_EQUALS("test.c:1:0: information: Include file: \"" + header + "\" not found. [missingInclude]\n", errout_str());
     }
@@ -2339,7 +2414,7 @@ private:
         ScopedFile header("header.h", "");
 
         std::string code("#include <header.h>");
-        PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
+        (void)PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
 
         ASSERT_EQUALS("test.c:1:0: information: Include file: <header.h> not found. Please note: Cppcheck does not need standard library headers to get proper results. [missingIncludeSystem]\n", errout_str());
     }
@@ -2353,7 +2428,7 @@ private:
         setTemplateFormat("simple");
 
         std::string code("#include <header.h>");
-        PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
+        (void)PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
 
         ASSERT_EQUALS("test.c:1:0: information: Include file: <header.h> not found. Please note: Cppcheck does not need standard library headers to get proper results. [missingIncludeSystem]\n", errout_str());
     }
@@ -2370,7 +2445,7 @@ private:
         ScopedFile header("header.h", "", "system");
 
         std::string code("#include <header.h>");
-        PreprocessorHelper::getcode(settings0, *this, code, "", "test.c");
+        (void)PreprocessorHelper::getcode(settings0, *this, code, "", "test.c");
 
         ASSERT_EQUALS("", errout_str());
     }
@@ -2387,7 +2462,7 @@ private:
         ScopedFile header("header.h", "", Path::getCurrentPath());
 
         std::string code("#include <" + header.path() + ">");
-        PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
+        (void)PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
 
         ASSERT_EQUALS("", errout_str());
     }
@@ -2403,7 +2478,7 @@ private:
         const std::string header = Path::join(Path::getCurrentPath(), "header.h");
 
         std::string code("#include <" + header + ">");
-        PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
+        (void)PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
 
         ASSERT_EQUALS("test.c:1:0: information: Include file: <" + header + "> not found. Please note: Cppcheck does not need standard library headers to get proper results. [missingIncludeSystem]\n", errout_str());
     }
@@ -2423,7 +2498,7 @@ private:
                          "#include <header.h>\n"
                          "#include <missing2.h>\n"
                          "#include \"header2.h\"");
-        PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
+        (void)PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
 
         ASSERT_EQUALS("test.c:1:0: information: Include file: \"missing.h\" not found. [missingInclude]\n"
                       "test.c:2:0: information: Include file: <header.h> not found. Please note: Cppcheck does not need standard library headers to get proper results. [missingIncludeSystem]\n"
@@ -2459,7 +2534,7 @@ private:
                          "#include \"" + missing3 + "\"\n"
                          "#include <" + header6.path() + ">\n"
                          "#include <" + missing4 + ">\n");
-        PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
+        (void)PreprocessorHelper::getcode(settings, *this, code, "", "test.c");
 
         ASSERT_EQUALS("test.c:1:0: information: Include file: \"missing.h\" not found. [missingInclude]\n"
                       "test.c:2:0: information: Include file: <header.h> not found. Please note: Cppcheck does not need standard library headers to get proper results. [missingIncludeSystem]\n"
@@ -2478,6 +2553,67 @@ private:
         ASSERT_EQUALS("void f ( long l ) {\n"
                       "if ( l > $2147483647 ) { }\n"
                       "}", actual);
+    }
+
+    void hashCalculation() {
+        // #12383
+        const char code[] = "int a;";
+        const char code2[] = "int  a;"; // extra space
+        const char code3[] = "\n\nint a;"; // extra new line
+
+        ASSERT_EQUALS(getHash(code), getHash(code));
+        ASSERT_EQUALS(getHash(code2), getHash(code2));
+        ASSERT_EQUALS(getHash(code3), getHash(code3));
+        ASSERT(getHash(code) != getHash(code2));
+        ASSERT(getHash(code) != getHash(code3));
+        ASSERT(getHash(code2) != getHash(code3));
+    }
+
+    void standard() const {
+
+        const char code[] = "int a;";
+        // TODO: this bypasses the standard determined from the settings - the parameter should not be exposed
+        simplecpp::DUI dui;
+
+        {
+            dui.std = "c89";
+            std::vector<std::string> files;
+            TokenList tokenlist{&settingsDefault};
+            preprocess(code, files, "test.cpp", tokenlist, dui);
+            ASSERT(tokenlist.front());
+        }
+
+        {
+            dui.std = "gnu23";
+            std::vector<std::string> files;
+            TokenList tokenlist{&settingsDefault};
+            preprocess(code, files, "test.cpp", tokenlist, dui);
+            ASSERT(tokenlist.front());
+        }
+
+        {
+            dui.std = "c++98";
+            std::vector<std::string> files;
+            TokenList tokenlist{&settingsDefault};
+            preprocess(code, files, "test.cpp", tokenlist, dui);
+            ASSERT(tokenlist.front());
+        }
+
+        {
+            dui.std = "gnu++26";
+            std::vector<std::string> files;
+            TokenList tokenlist{&settingsDefault};
+            preprocess(code, files, "test.cpp", tokenlist, dui);
+            ASSERT(tokenlist.front());
+        }
+
+        {
+            dui.std = "gnu77";
+            std::vector<std::string> files;
+            TokenList tokenlist{&settingsDefault};
+            preprocess(code, files, "test.cpp", tokenlist, dui);
+            ASSERT(!tokenlist.front()); // nothing is tokenized when an unknown standard is provided
+        }
     }
 };
 

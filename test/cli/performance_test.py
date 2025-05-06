@@ -3,9 +3,10 @@
 
 import os
 import sys
+
 import pytest
 
-from testutils import cppcheck, assert_cppcheck
+from testutils import cppcheck
 
 
 
@@ -16,7 +17,7 @@ def test_slow_array_many_floats(tmpdir):
     filename = os.path.join(tmpdir, 'hang.c')
     with open(filename, 'wt') as f:
         f.write("const float f[] = {\n")
-        for i in range(20000):
+        for _ in range(20000):
             f.write('    13.6f,\n')
         f.write("};\n")
     cppcheck([filename]) # should not take more than ~1 second
@@ -29,7 +30,7 @@ def test_slow_array_many_strings(tmpdir):
     filename = os.path.join(tmpdir, 'hang.c')
     with open(filename, 'wt') as f:
         f.write("const char *strings[] = {\n")
-        for i in range(20000):
+        for _ in range(20000):
             f.write('    "abc",\n')
         f.write("};\n")
     cppcheck([filename]) # should not take more than ~1 second
@@ -41,7 +42,7 @@ def test_slow_long_line(tmpdir):
     filename = os.path.join(tmpdir, 'hang.c')
     with open(filename, 'wt') as f:
         f.write("#define A() static const int a[] = {\\\n")
-        for i in range(5000):
+        for _ in range(5000):
             f.write(" -123, 456, -789,\\\n")
         f.write("};\n")
     cppcheck([filename]) # should not take more than ~1 second
@@ -185,7 +186,7 @@ def test_slow_initlist_varchanged(tmpdir):
                     }
                 }""")
     cppcheck([filename]) # should not take more than ~1 second
-    
+
 
 @pytest.mark.timeout(10)
 def test_slow_many_scopes(tmpdir):
@@ -219,3 +220,23 @@ def test_slow_many_scopes(tmpdir):
                     return EXIT_SUCCESS;
                 }""")
     cppcheck([filename]) # should not take more than ~1 second
+
+@pytest.mark.skipif(sys.platform == 'darwin', reason='GitHub macOS runners are too slow')
+@pytest.mark.timeout(20)
+def test_crash_array_in_namespace(tmpdir):
+    # 12847
+    filename = os.path.join(tmpdir, 'hang.cpp')
+    with open(filename, 'wt') as f:
+        f.write(r"""
+                #define ROW A, A, A, A, A, A, A, A,
+                #define ROW8 ROW ROW ROW ROW ROW ROW ROW ROW
+                #define ROW64 ROW8 ROW8 ROW8 ROW8 ROW8 ROW8 ROW8 ROW8
+                #define ROW512 ROW64 ROW64 ROW64 ROW64 ROW64 ROW64 ROW64 ROW64
+                #define ROW4096 ROW512 ROW512 ROW512 ROW512 ROW512 ROW512 ROW512 ROW512
+                namespace N {
+                    static const char A = 'a';
+                    const char a[] = {
+                        ROW4096 ROW4096 ROW4096 ROW4096
+                    };
+                }""")
+    cppcheck([filename]) # should not take more than ~5 seconds

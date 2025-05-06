@@ -1,4 +1,4 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
  * Copyright (C) 2007-2024 Cppcheck team.
  *
@@ -121,6 +121,16 @@
 #  define DEPRECATED
 #endif
 
+// returns_nonnull
+#if __has_cpp_attribute (gnu::returns_nonnull)
+#  define RET_NONNULL [[gnu::returns_nonnull]]
+#elif (defined(__clang__) && ((__clang_major__ > 3) || ((__clang_major__ == 3) && (__clang_minor__ >= 7)))) \
+    || (defined(__GNUC__) && (__GNUC__ >= 9))
+#  define RET_NONNULL __attribute__((returns_nonnull))
+#else
+#  define RET_NONNULL
+#endif
+
 #define REQUIRES(msg, ...) class=typename std::enable_if<__VA_ARGS__::value>::type
 
 #include <string>
@@ -172,6 +182,9 @@ static const std::string emptyString;
 #define SUPPRESS_WARNING_GCC_POP
 #define SUPPRESS_WARNING_CLANG_PUSH(warning) SUPPRESS_WARNING_PUSH(warning)
 #define SUPPRESS_WARNING_CLANG_POP SUPPRESS_WARNING_POP
+#define FORCE_WARNING_PUSH(warn) _Pragma("clang diagnostic push") _Pragma(STRINGISIZE(clang diagnostic warning warn))
+#define FORCE_WARNING_CLANG_PUSH(warning) FORCE_WARNING_PUSH(warning)
+#define FORCE_WARNING_CLANG_POP SUPPRESS_WARNING_POP
 #elif defined(__GNUC__)
 #define SUPPRESS_WARNING_PUSH(warning) _Pragma("GCC diagnostic push") _Pragma(STRINGISIZE(GCC diagnostic ignored warning))
 #define SUPPRESS_WARNING_POP _Pragma("GCC diagnostic pop")
@@ -179,6 +192,9 @@ static const std::string emptyString;
 #define SUPPRESS_WARNING_GCC_POP SUPPRESS_WARNING_POP
 #define SUPPRESS_WARNING_CLANG_PUSH(warning)
 #define SUPPRESS_WARNING_CLANG_POP
+#define FORCE_WARNING_PUSH(warning)
+#define FORCE_WARNING_CLANG_PUSH(warning)
+#define FORCE_WARNING_CLANG_POP
 #else
 #define SUPPRESS_WARNING_PUSH(warning)
 #define SUPPRESS_WARNING_POP
@@ -186,6 +202,9 @@ static const std::string emptyString;
 #define SUPPRESS_WARNING_GCC_POP
 #define SUPPRESS_WARNING_CLANG_PUSH(warning)
 #define SUPPRESS_WARNING_CLANG_POP
+#define FORCE_WARNING_PUSH(warning)
+#define FORCE_WARNING_CLANG_PUSH(warning)
+#define FORCE_WARNING_CLANG_POP
 #endif
 
 #if !defined(NO_WINDOWS_SEH) && defined(_WIN32) && defined(_MSC_VER)

@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,11 +22,13 @@
 //---------------------------------------------------------------------------
 
 #include "config.h"
+#include "errortypes.h"
 #include "mathlib.h"
 #include "templatesimplifier.h"
 #include "utils.h"
 #include "vfvalue.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstddef>
@@ -36,6 +38,7 @@
 #include <ostream>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -49,6 +52,7 @@ class Variable;
 class ConstTokenRange;
 class Token;
 struct TokensFrontBack;
+class TokenList;
 
 struct ScopeInfo2 {
     ScopeInfo2(std::string name_, const Token *bodyEnd_, std::set<std::string> usingNamespaces_ = std::set<std::string>()) : name(std::move(name_)), bodyEnd(bodyEnd_), usingNamespaces(std::move(usingNamespaces_)) {}
@@ -57,7 +61,7 @@ struct ScopeInfo2 {
     std::set<std::string> usingNamespaces;
 };
 
-enum class TokenDebug { None, ValueFlow, ValueType };
+enum class TokenDebug : std::uint8_t { None, ValueFlow, ValueType };
 
 struct TokenImpl {
     nonneg int mVarId{};
@@ -98,7 +102,7 @@ struct TokenImpl {
     std::string* mOriginalName{};
 
     // If this token came from a macro replacement list, this is the name of that macro
-    std::string mMacroName;
+    std::string* mMacroName{};
 
     // ValueType
     ValueType* mValueType{};
@@ -115,14 +119,25 @@ struct TokenImpl {
 
     // __cppcheck_in_range__
     struct CppcheckAttributes {
-        enum Type { LOW, HIGH } type = LOW;
+        enum Type : std::uint8_t { LOW, HIGH } type = LOW;
         MathLib::bigint value{};
         CppcheckAttributes* next{};
     };
     CppcheckAttributes* mCppcheckAttributes{};
 
+    // alignas expressions
+    std::unique_ptr<std::vector<std::string>> mAttributeAlignas;
+    void addAttributeAlignas(const std::string& a) {
+        if (!mAttributeAlignas)
+            mAttributeAlignas = std::unique_ptr<std::vector<std::string>>(new std::vector<std::string>());
+        if (std::find(mAttributeAlignas->cbegin(), mAttributeAlignas->cend(), a) == mAttributeAlignas->cend())
+            mAttributeAlignas->push_back(a);
+    }
+
+    std::string mAttributeCleanup;
+
     // For memoization, to speed up parsing of huge arrays #8897
-    enum class Cpp11init { UNKNOWN, CPP11INIT, NOINIT } mCpp11init = Cpp11init::UNKNOWN;
+    enum class Cpp11init : std::uint8_t { UNKNOWN, CPP11INIT, NOINIT } mCpp11init = Cpp11init::UNKNOWN;
 
     TokenDebug mDebug{};
 
@@ -151,13 +166,16 @@ class CPPCHECKLIB Token {
     friend class TestToken;
 
 private:
-    TokensFrontBack& mTokensFrontBack;
+    const TokenList& mList;
+    std::shared_ptr<TokensFrontBack> mTokensFrontBack;
+
+    static const std::string mEmptyString;
 
 public:
     Token(const Token &) = delete;
     Token& operator=(const Token &) = delete;
 
-    enum Type {
+    enum Type : std::uint8_t {
         eVariable, eType, eFunction, eKeyword, eName, // Names: Variable (varId), Type (typeId, later), Function (FuncId, later), Language keyword, Name (unknown identifier)
         eNumber, eString, eChar, eBoolean, eLiteral, eEnumerator, // Literals: Number, String, Character, Boolean, User defined literal (C++11), Enumerator
         eArithmeticalOp, eComparisonOp, eAssignmentOp, eLogicalOp, eBitOp, eIncDecOp, eExtendedOp, // Operators: Arithmetical, Comparison, Assignment, Logical, Bitwise, ++/--, Extended
@@ -168,7 +186,7 @@ public:
         eNone
     };
 
-    explicit Token(TokensFrontBack &tokensFrontBack);
+    Token(const TokenList& tokenlist, std::shared_ptr<TokensFrontBack> tokensFrontBack);
     // for usage in CheckIO::ArgumentInfo only
     explicit Token(const Token *tok);
     ~Token();
@@ -213,21 +231,37 @@ public:
      * For example index 1 would return next token, and 2
      * would return next from that one.
      */
-    const Token *tokAt(int index) const;
-    Token *tokAt(int index);
+    const Token *tokAt(int index) const
+    {
+        return tokAtImpl(this, index);
+    }
+    Token *tokAt(int index)
+    {
+        return tokAtImpl(this, index);
+    }
 
     /**
      * @return the link to the token in given index, related to this token.
      * For example index 1 would return the link to next token.
      */
-    const Token *linkAt(int index) const;
-    Token *linkAt(int index);
+    const Token *linkAt(int index) const
+    {
+        return linkAtImpl(this, index);
+    }
+    Token *linkAt(int index)
+    {
+        return linkAtImpl(this, index);
+    }
 
     /**
      * @return String of the token in given index, related to this token.
      * If that token does not exist, an empty string is being returned.
      */
-    const std::string &strAt(int index) const;
+    const std::string &strAt(int index) const
+    {
+        const Token *tok = this->tokAt(index);
+        return tok ? tok->mStr : mEmptyString;
+    }
 
     /**
      * Match given token (or list of tokens) to a pattern list.
@@ -333,12 +367,7 @@ public:
     }
     void setValueType(ValueType *vt);
 
-    const ValueType *argumentType() const {
-        const Token *top = this;
-        while (top && !Token::Match(top->astParent(), ",|("))
-            top = top->astParent();
-        return top ? top->mImpl->mValueType : nullptr;
-    }
+    const ValueType *argumentType() const;
 
     Token::Type tokType() const {
         return mTokType;
@@ -453,7 +482,7 @@ public:
         setFlag(fIsStandardType, b);
     }
     bool isExpandedMacro() const {
-        return !mImpl->mMacroName.empty();
+        return !!mImpl->mMacroName;
     }
     bool isCast() const {
         return getFlag(fIsCast);
@@ -532,6 +561,30 @@ public:
     }
     void isAttributeMaybeUnused(const bool value) {
         setFlag(fIsAttributeMaybeUnused, value);
+    }
+    bool isAttributeFallthrough() const {
+        return getFlag(fIsAttributeFallthrough);
+    }
+    void isAttributeFallthrough(const bool value) {
+        setFlag(fIsAttributeFallthrough, value);
+    }
+    std::vector<std::string> getAttributeAlignas() const {
+        return mImpl->mAttributeAlignas ? *mImpl->mAttributeAlignas : std::vector<std::string>();
+    }
+    bool hasAttributeAlignas() const {
+        return !!mImpl->mAttributeAlignas;
+    }
+    void addAttributeAlignas(const std::string& a) {
+        mImpl->addAttributeAlignas(a);
+    }
+    void addAttributeCleanup(const std::string& funcname) {
+        mImpl->mAttributeCleanup = funcname;
+    }
+    const std::string& getAttributeCleanup() const {
+        return mImpl->mAttributeCleanup;
+    }
+    bool hasAttributeCleanup() const {
+        return !mImpl->mAttributeCleanup.empty();
     }
     void setCppcheckAttribute(TokenImpl::CppcheckAttributes::Type type, MathLib::bigint value) {
         mImpl->setCppcheckAttribute(type, value);
@@ -682,6 +735,13 @@ public:
         setFlag(fIsInitComma, b);
     }
 
+    bool isInitBracket() const {
+        return getFlag(fIsInitBracket);
+    }
+    void isInitBracket(bool b) {
+        setFlag(fIsInitBracket, b);
+    }
+
     // cppcheck-suppress unusedFunction
     bool isBitfield() const {
         return mImpl->mBits > 0;
@@ -721,13 +781,13 @@ public:
 
     bool isCChar() const {
         return (((mTokType == eString) && isPrefixStringCharLiteral(mStr, '"', emptyString)) ||
-                ((mTokType ==  eChar) && isPrefixStringCharLiteral(mStr, '\'', emptyString) && mStr.length() == 3));
+                ((mTokType == eChar) && isPrefixStringCharLiteral(mStr, '\'', emptyString) && (replaceEscapeSequences(getCharLiteral(mStr)).size() == 1)));
     }
 
     bool isCMultiChar() const {
-        return (((mTokType ==  eChar) && isPrefixStringCharLiteral(mStr, '\'', emptyString)) &&
-                (mStr.length() > 3));
+        return (mTokType == eChar) && isPrefixStringCharLiteral(mStr, '\'', emptyString) && (replaceEscapeSequences(getCharLiteral(mStr)).size() > 1);
     }
+
     /**
      * @brief Is current token a template argument?
      *
@@ -752,43 +812,70 @@ public:
         setFlag(fIsTemplateArg, value);
     }
 
-    std::string getMacroName() const {
-        return mImpl->mMacroName;
+    const std::string& getMacroName() const {
+        return mImpl->mMacroName ? *mImpl->mMacroName : mEmptyString;
     }
     void setMacroName(std::string name) {
-        mImpl->mMacroName = std::move(name);
+        if (!mImpl->mMacroName)
+            mImpl->mMacroName = new std::string(std::move(name));
+        else
+            *mImpl->mMacroName = std::move(name);
     }
 
     template<size_t count>
     static const Token *findsimplematch(const Token * const startTok, const char (&pattern)[count]) {
         return findsimplematch(startTok, pattern, count-1);
     }
-    static const Token *findsimplematch(const Token * const startTok, const char pattern[], size_t pattern_len);
+    static const Token *findsimplematch(const Token * startTok, const char pattern[], size_t pattern_len);
 
     template<size_t count>
     static const Token *findsimplematch(const Token * const startTok, const char (&pattern)[count], const Token * const end) {
         return findsimplematch(startTok, pattern, count-1, end);
     }
-    static const Token *findsimplematch(const Token * const startTok, const char pattern[], size_t pattern_len, const Token * const end);
+    static const Token *findsimplematch(const Token * startTok, const char pattern[], size_t pattern_len, const Token * end);
 
-    static const Token *findmatch(const Token * const startTok, const char pattern[], const nonneg int varId = 0);
-    static const Token *findmatch(const Token * const startTok, const char pattern[], const Token * const end, const nonneg int varId = 0);
+    static const Token *findmatch(const Token * startTok, const char pattern[], nonneg int varId = 0);
+    static const Token *findmatch(const Token * startTok, const char pattern[], const Token * end, nonneg int varId = 0);
 
     template<size_t count>
     static Token *findsimplematch(Token * const startTok, const char (&pattern)[count]) {
         return findsimplematch(startTok, pattern, count-1);
     }
-    static Token *findsimplematch(Token * const startTok, const char pattern[], size_t pattern_len);
+    static Token *findsimplematch(Token * startTok, const char pattern[], size_t pattern_len);
     template<size_t count>
     static Token *findsimplematch(Token * const startTok, const char (&pattern)[count], const Token * const end) {
         return findsimplematch(startTok, pattern, count-1, end);
     }
-    static Token *findsimplematch(Token * const startTok, const char pattern[], size_t pattern_len, const Token * const end);
+    static Token *findsimplematch(Token * startTok, const char pattern[], size_t pattern_len, const Token * end);
 
-    static Token *findmatch(Token * const startTok, const char pattern[], const nonneg int varId = 0);
-    static Token *findmatch(Token * const startTok, const char pattern[], const Token * const end, const nonneg int varId = 0);
+    static Token *findmatch(Token * startTok, const char pattern[], nonneg int varId = 0);
+    static Token *findmatch(Token * startTok, const char pattern[], const Token * end, nonneg int varId = 0);
 
 private:
+    template<class T, REQUIRES("T must be a Token class", std::is_convertible<T*, const Token*> )>
+    static T *tokAtImpl(T *tok, int index)
+    {
+        while (index > 0 && tok) {
+            tok = tok->next();
+            --index;
+        }
+        while (index < 0 && tok) {
+            tok = tok->previous();
+            ++index;
+        }
+        return tok;
+    }
+
+    template<class T, REQUIRES("T must be a Token class", std::is_convertible<T*, const Token*> )>
+    static T *linkAtImpl(T *thisTok, int index)
+    {
+        T *tok = thisTok->tokAt(index);
+        if (!tok) {
+            throw InternalError(thisTok, "Internal error. Token::linkAt called with index outside the tokens range.");
+        }
+        return tok->link();
+    }
+
     /**
      * Needle is build from multiple alternatives. If one of
      * them is equal to haystack, return value is 1. If there
@@ -852,9 +939,9 @@ public:
      * @param prepend Insert the new token before this token when it's not
      * the first one on the tokens list.
      */
-    Token* insertToken(const std::string& tokenStr, const std::string& originalNameStr = emptyString, const std::string& macroNameStr = emptyString, bool prepend = false);
+    RET_NONNULL Token* insertToken(const std::string& tokenStr, const std::string& originalNameStr = emptyString, const std::string& macroNameStr = emptyString, bool prepend = false);
 
-    Token* insertTokenBefore(const std::string& tokenStr, const std::string& originalNameStr = emptyString, const std::string& macroNameStr = emptyString)
+    RET_NONNULL Token* insertTokenBefore(const std::string& tokenStr, const std::string& originalNameStr = emptyString, const std::string& macroNameStr = emptyString)
     {
         return insertToken(tokenStr, originalNameStr, macroNameStr, true);
     }
@@ -871,13 +958,11 @@ public:
         return mImpl->mVarId;
     }
     void varId(nonneg int id) {
+        if (mImpl->mVarId == id)
+            return;
+
         mImpl->mVarId = id;
-        if (id != 0) {
-            tokType(eVariable);
-            isStandardType(false);
-        } else {
-            update_property_info();
-        }
+        update_property_info();
     }
 
     nonneg int exprId() const {
@@ -901,27 +986,31 @@ public:
     }
 
     /**
-     * For debugging purposes, prints token and all tokens
-     * followed by it.
+     * For debugging purposes, prints token and all tokens followed by it.
+     */
+    void printOut() const;
+
+    /**
+     * For debugging purposes, prints token and all tokens followed by it.
      * @param title Title for the printout or use default parameter or 0
      * for no title.
      */
-    void printOut(const char *title = nullptr) const;
+    void printOut(std::ostream& out, const char *title = nullptr) const;
 
     /**
-     * For debugging purposes, prints token and all tokens
-     * followed by it.
+     * For debugging purposes, prints token and all tokens followed by it.
+     * @param xml print in XML format
      * @param title Title for the printout or use default parameter or 0
      * for no title.
      * @param fileNames Prints out file name instead of file index.
      * File index should match the index of the string in this vector.
      */
-    void printOut(const char *title, const std::vector<std::string> &fileNames) const;
+    void printOut(std::ostream& out, bool xml, const char *title, const std::vector<std::string> &fileNames) const;
 
     /**
      * print out tokens - used for debugging
      */
-    void printLines(int lines=5) const;
+    void printLines(std::ostream& out, int lines=5) const;
 
     /**
      * Replace token replaceThis with tokens between start and end,
@@ -1013,6 +1102,9 @@ public:
      * to.
      */
     void link(Token *linkToToken) {
+        if (mLink == linkToToken)
+            return;
+
         mLink = linkToToken;
         if (mStr == "<" || mStr == ">")
             update_property_info();
@@ -1105,6 +1197,8 @@ public:
 
     static std::string typeStr(const Token* tok);
 
+    static bool isStandardType(const std::string& str);
+
     /**
      * @return a pointer to the Enumerator associated with this token.
      */
@@ -1157,7 +1251,7 @@ public:
     /**
      * @return the first token of the next argument. Does only work on argument
      * lists. Requires that Tokenizer::createLinks2() has been called before.
-     * Returns 0, if there is no next argument.
+     * Returns nullptr, if there is no next argument.
      */
     const Token* nextArgument() const;
     Token *nextArgument();
@@ -1165,14 +1259,14 @@ public:
     /**
      * @return the first token of the next argument. Does only work on argument
      * lists. Should be used only before Tokenizer::createLinks2() was called.
-     * Returns 0, if there is no next argument.
+     * Returns nullptr, if there is no next argument.
      */
     const Token* nextArgumentBeforeCreateLinks2() const;
 
     /**
      * @return the first token of the next template argument. Does only work on template argument
      * lists. Requires that Tokenizer::createLinks2() has been called before.
-     * Returns 0, if there is no next argument.
+     * Returns nullptr, if there is no next argument.
      */
     const Token* nextTemplateArgument() const;
 
@@ -1191,7 +1285,7 @@ public:
      * @return the original name.
      */
     const std::string & originalName() const {
-        return mImpl->mOriginalName ? *mImpl->mOriginalName : emptyString;
+        return mImpl->mOriginalName ? *mImpl->mOriginalName : mEmptyString;
     }
 
     const std::list<ValueFlow::Value>& values() const {
@@ -1216,22 +1310,26 @@ public:
 
     const ValueFlow::Value* getKnownValue(ValueFlow::Value::ValueType t) const;
     MathLib::bigint getKnownIntValue() const {
+        assert(!mImpl->mValues->empty());
+        assert(mImpl->mValues->front().isKnown());
+        assert(mImpl->mValues->front().valueType == ValueFlow::Value::ValueType::INT);
         return mImpl->mValues->front().intvalue;
     }
 
-    const ValueFlow::Value* getValue(const MathLib::bigint val) const;
+    const ValueFlow::Value* getValue(MathLib::bigint val) const;
 
     const ValueFlow::Value* getMaxValue(bool condition, MathLib::bigint path = 0) const;
     const ValueFlow::Value* getMinValue(bool condition, MathLib::bigint path = 0) const;
 
     const ValueFlow::Value* getMovedValue() const;
 
-    const ValueFlow::Value * getValueLE(const MathLib::bigint val, const Settings *settings) const;
-    const ValueFlow::Value * getValueGE(const MathLib::bigint val, const Settings *settings) const;
+    const ValueFlow::Value * getValueLE(MathLib::bigint val, const Settings &settings) const;
+    const ValueFlow::Value * getValueGE(MathLib::bigint val, const Settings &settings) const;
+    const ValueFlow::Value * getValueNE(MathLib::bigint val) const;
 
-    const ValueFlow::Value * getInvalidValue(const Token *ftok, nonneg int argnr, const Settings *settings) const;
+    const ValueFlow::Value * getInvalidValue(const Token *ftok, nonneg int argnr, const Settings &settings) const;
 
-    const ValueFlow::Value* getContainerSizeValue(const MathLib::bigint val) const;
+    const ValueFlow::Value* getContainerSizeValue(MathLib::bigint val) const;
 
     const Token *getValueTokenMaxStrLength() const;
     const Token *getValueTokenMinStrSize(const Settings &settings, MathLib::bigint* path = nullptr) const;
@@ -1302,33 +1400,35 @@ private:
         fIsAttributeExport      = (1ULL << 16), // __attribute__((__visibility__("default"))), __declspec(dllexport)
         fIsAttributeMaybeUnused = (1ULL << 17), // [[maybe_unused]]
         fIsAttributeNodiscard   = (1ULL << 18), // __attribute__ ((warn_unused_result)), [[nodiscard]]
-        fIsControlFlowKeyword   = (1ULL << 19), // if/switch/while/...
-        fIsOperatorKeyword      = (1ULL << 20), // operator=, etc
-        fIsComplex              = (1ULL << 21), // complex/_Complex type
-        fIsEnumType             = (1ULL << 22), // enumeration type
-        fIsName                 = (1ULL << 23),
-        fIsLiteral              = (1ULL << 24),
-        fIsTemplateArg          = (1ULL << 25),
-        fAtAddress              = (1ULL << 26), // @ 0x4000
-        fIncompleteVar          = (1ULL << 27),
-        fConstexpr              = (1ULL << 28),
-        fExternC                = (1ULL << 29),
-        fIsSplitVarDeclComma    = (1ULL << 30), // set to true when variable declarations are split up ('int a,b;' => 'int a; int b;')
-        fIsSplitVarDeclEq       = (1ULL << 31), // set to true when variable declaration with initialization is split up ('int a=5;' => 'int a; a=5;')
-        fIsImplicitInt          = (1ULL << 32), // Is "int" token implicitly added?
-        fIsInline               = (1ULL << 33), // Is this a inline type
-        fIsTemplate             = (1ULL << 34),
-        fIsSimplifedScope       = (1ULL << 35), // scope added when simplifying e.g. if (int i = ...; ...)
-        fIsRemovedVoidParameter = (1ULL << 36), // A void function parameter has been removed
-        fIsIncompleteConstant   = (1ULL << 37),
-        fIsRestrict             = (1ULL << 38), // Is this a restrict pointer type
-        fIsAtomic               = (1ULL << 39), // Is this a _Atomic declaration
-        fIsSimplifiedTypedef    = (1ULL << 40),
-        fIsFinalType            = (1ULL << 41), // Is this a type with final specifier
-        fIsInitComma            = (1ULL << 42), // Is this comma located inside some {..}. i.e: {1,2,3,4}
+        fIsAttributeFallthrough = (1ULL << 19), // [[__fallthrough__]], [[fallthrough]]
+        fIsControlFlowKeyword   = (1ULL << 20), // if/switch/while/...
+        fIsOperatorKeyword      = (1ULL << 21), // operator=, etc
+        fIsComplex              = (1ULL << 22), // complex/_Complex type
+        fIsEnumType             = (1ULL << 23), // enumeration type
+        fIsName                 = (1ULL << 24),
+        fIsLiteral              = (1ULL << 25),
+        fIsTemplateArg          = (1ULL << 26),
+        fAtAddress              = (1ULL << 27), // @ 0x4000
+        fIncompleteVar          = (1ULL << 28),
+        fConstexpr              = (1ULL << 29),
+        fExternC                = (1ULL << 30),
+        fIsSplitVarDeclComma    = (1ULL << 31), // set to true when variable declarations are split up ('int a,b;' => 'int a; int b;')
+        fIsSplitVarDeclEq       = (1ULL << 32), // set to true when variable declaration with initialization is split up ('int a=5;' => 'int a; a=5;')
+        fIsImplicitInt          = (1ULL << 33), // Is "int" token implicitly added?
+        fIsInline               = (1ULL << 34), // Is this a inline type
+        fIsTemplate             = (1ULL << 35),
+        fIsSimplifedScope       = (1ULL << 36), // scope added when simplifying e.g. if (int i = ...; ...)
+        fIsRemovedVoidParameter = (1ULL << 37), // A void function parameter has been removed
+        fIsIncompleteConstant   = (1ULL << 38),
+        fIsRestrict             = (1ULL << 39), // Is this a restrict pointer type
+        fIsAtomic               = (1ULL << 40), // Is this a _Atomic declaration
+        fIsSimplifiedTypedef    = (1ULL << 41),
+        fIsFinalType            = (1ULL << 42), // Is this a type with final specifier
+        fIsInitComma            = (1ULL << 43), // Is this comma located inside some {..}. i.e: {1,2,3,4}
+        fIsInitBracket          = (1ULL << 44), // Is this bracket used as a part of variable initialization i.e: int a{5}, b(2);
     };
 
-    enum : uint64_t {
+    enum : std::uint8_t  {
         efMaxSize = sizeof(nonneg int) * 8,
         efIsUnique = efMaxSize - 2,
     };
@@ -1364,11 +1464,12 @@ private:
     /** Update internal property cache about isStandardType() */
     void update_property_isStandardType();
 
-    /** Update internal property cache about string and char literals */
-    void update_property_char_string_literal();
-
     /** Internal helper function to avoid excessive string allocations */
-    void astStringVerboseRecursive(std::string& ret, const nonneg int indent1 = 0, const nonneg int indent2 = 0) const;
+    void astStringVerboseRecursive(std::string& ret, nonneg int indent1 = 0, nonneg int indent2 = 0) const;
+
+    // cppcheck-suppress premium-misra-cpp-2023-12.2.1
+    bool mIsC : 1;
+    bool mIsCpp : 1;
 
 public:
     void astOperand1(Token *tok);
@@ -1413,14 +1514,14 @@ public:
         return nullptr;
 
     }
-    Token *astTop() {
+    RET_NONNULL Token *astTop() {
         Token *ret = this;
         while (ret->mImpl->mAstParent)
             ret = ret->mImpl->mAstParent;
         return ret;
     }
 
-    const Token *astTop() const {
+    RET_NONNULL const Token *astTop() const {
         const Token *ret = this;
         while (ret->mImpl->mAstParent)
             ret = ret->mImpl->mAstParent;
@@ -1460,7 +1561,7 @@ public:
 
     void printAst(bool verbose, bool xml, const std::vector<std::string> &fileNames, std::ostream &out) const;
 
-    void printValueFlow(bool xml, std::ostream &out) const;
+    void printValueFlow(const std::vector<std::string>& files, bool xml, std::ostream &out) const;
 
     void scopeInfo(std::shared_ptr<ScopeInfo2> newScopeInfo);
     std::shared_ptr<ScopeInfo2> scopeInfo() const;
@@ -1479,9 +1580,15 @@ public:
         mImpl->mDebug = td;
     }
 
-    bool isCpp() const;
+    bool isCpp() const
+    {
+        return mIsCpp;
+    }
 
-    bool isC() const;
+    bool isC() const
+    {
+        return mIsC;
+    }
 };
 
 Token* findTypeEnd(Token* tok);

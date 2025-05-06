@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,15 +17,24 @@
  */
 
 #include "cppcheck.h"
-#include "type2.h"
+#include "errorlogger.h"
+#include "errortypes.h"
+#include "filesettings.h"
+#include "settings.h"
+#include "suppressions.h"
 
-#ifdef NO_FUZZ
+#include <string>
+
+#ifndef NO_FUZZ
+#include <cstddef>
+#include <cstdint>
+
+#include "type2.h"
+#else
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
 #endif
-
-enum class Color;
 
 class DummyErrorLogger : public ErrorLogger {
 public:
@@ -33,17 +42,28 @@ public:
     void reportErr(const ErrorMessage& /*msg*/) override {}
     void reportProgress(const std::string& /*filename*/,
                         const char /*stage*/[],
-                        const std::size_t /*value*/) override {} // FN
+                        const std::size_t /*value*/) override {}
 };
 
+static Settings create_settings()
+{
+    // TODO: load std.cfg
+    Settings s;
+    s.templateFormat = "{bold}{file}:{line}:{column}: {red}{inconclusive:{magenta}}{severity}:{inconclusive: inconclusive:}{default} {message} [{id}]{reset}\\n{code}";
+    s.templateLocation = "{bold}{file}:{line}:{column}: {dim}note:{reset} {info}\\n{code}";
+    s.addEnabled("all");
+    s.certainty.setEnabled(Certainty::inconclusive, true);
+    return s;
+}
+static const Settings s_settings = create_settings();
 static DummyErrorLogger s_errorLogger;
+static const FileWithDetails s_file("test.cpp");
 
 static void doCheck(const std::string& code)
 {
-    CppCheck cppcheck(s_errorLogger, false, nullptr);
-    cppcheck.settings().addEnabled("all");
-    cppcheck.settings().certainty.setEnabled(Certainty::inconclusive, true);
-    cppcheck.check("test.cpp", code);
+    Suppressions supprs;
+    CppCheck cppcheck(s_settings, supprs, s_errorLogger, false, nullptr);
+    cppcheck.check(s_file, code);
 }
 
 #ifndef NO_FUZZ
@@ -60,7 +80,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t dataSize)
 #else
 int main(int argc, char * argv[])
 {
-    if (argc != 2)
+    if (argc < 2 || argc > 3)
         return EXIT_FAILURE;
 
     std::ifstream f(argv[1]);
@@ -73,8 +93,11 @@ int main(int argc, char * argv[])
     if (!f.good())
         return EXIT_FAILURE;
 
+    const int cnt = (argc == 3) ? std::stoi(argv[2]) : 1;
+
     const std::string code = oss.str();
-    doCheck(code);
+    for (int i = 0; i < cnt; ++i)
+        doCheck(code);
 
     return EXIT_SUCCESS;
 }

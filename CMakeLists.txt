@@ -1,13 +1,12 @@
-cmake_minimum_required(VERSION 3.5)
-if (MSVC)
-    cmake_minimum_required(VERSION 3.13)
-endif()
-cmake_policy(SET CMP0048 NEW) # allow VERSION in project()
-project(Cppcheck VERSION 2.14.99 LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.13)
+project(Cppcheck VERSION 2.17.99 LANGUAGES CXX)
+
+include(cmake/options.cmake)
 
 include(cmake/cxx11.cmake)
 use_cxx11()
-set (CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -15,18 +14,18 @@ include(GNUInstallDirs)
 
 include(cmake/compilerCheck.cmake)
 include(cmake/versions.cmake)
-include(cmake/options.cmake)
 include(cmake/findDependencies.cmake)
 include(cmake/compileroptions.cmake)
 include(cmake/compilerDefinitions.cmake)
 include(cmake/buildFiles.cmake)
-include(cmake/printInfo.cmake)
 if(BUILD_GUI)
     include(cmake/qtCompat.cmake)
 endif()
+include(cmake/printInfo.cmake)
 
 
-file(GLOB addons "addons/*.py")
+file(GLOB addons_py "addons/*.py")
+file(GLOB addons_json "addons/*.json")
 file(GLOB cfgs "cfg/*.cfg")
 file(GLOB platforms "platforms/*.xml")
 
@@ -70,6 +69,12 @@ if(LIBXML2_XMLLINT_EXECUTABLE)
     add_custom_target(validateRules ${LIBXML2_XMLLINT_EXECUTABLE} --noout ${CMAKE_SOURCE_DIR}/rules/*.xml)
 endif()
 
+# TODO: add the following Makefile features:
+# - "man/cppcheck.1" target
+# - "tags" target
+# - Cygwin handling
+# - MinGW handling
+
 if(BUILD_TESTS)
     enable_testing()
 endif()
@@ -79,6 +84,7 @@ add_custom_target(copy_cfg ALL
         "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${CMAKE_CFG_INTDIR}/cfg"
     COMMENT "Copying cfg files to ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${CMAKE_CFG_INTDIR}")
 
+# TODO: copy *.py and *.json only
 add_custom_target(copy_addons ALL
     ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/addons"
         "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${CMAKE_CFG_INTDIR}/addons"
@@ -98,7 +104,6 @@ add_subdirectory(lib)   # CppCheck Library
 add_subdirectory(cli)   # Client application
 add_subdirectory(test)  # Tests
 add_subdirectory(gui)   # Graphical application
-add_subdirectory(tools/triage)   # Triage tool
 add_subdirectory(tools)
 add_subdirectory(man)
 

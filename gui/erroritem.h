@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2023 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -91,6 +91,9 @@ public:
     unsigned long long hash;
     QList<QErrorPathItem> errorPath;
     QString symbolNames;
+    QString remark;
+    QString classification; // misra/cert/etc: classification/level
+    QString guideline; // misra/cert/etc: guideline/rule
 
     // Special GUI properties
     QString sinceDate;
@@ -122,6 +125,7 @@ public:
     QString message;
     QString sinceDate;
     QString tags;
+    QString remark;
 };
 
 /// @}

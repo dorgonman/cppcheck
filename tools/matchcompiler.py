@@ -158,35 +158,35 @@ class MatchCompiler:
     def _compileCmd(tok):
         if tok == '%any%':
             return 'true'
-        elif tok == '%assign%':
+        if tok == '%assign%':
             return 'tok->isAssignmentOp()'
-        elif tok == '%bool%':
+        if tok == '%bool%':
             return 'tok->isBoolean()'
-        elif tok == '%char%':
+        if tok == '%char%':
             return '(tok->tokType() == Token::eChar)'
-        elif tok == '%comp%':
+        if tok == '%comp%':
             return 'tok->isComparisonOp()'
-        elif tok == '%num%':
+        if tok == '%num%':
             return 'tok->isNumber()'
-        elif tok == '%cop%':
+        if tok == '%cop%':
             return 'tok->isConstOp()'
-        elif tok == '%op%':
+        if tok == '%op%':
             return 'tok->isOp()'
-        elif tok == '%or%':
+        if tok == '%or%':
             return '(tok->tokType() == Token::eBitOp && tok->str() == MatchCompiler::makeConstString("|") )'
-        elif tok == '%oror%':
+        if tok == '%oror%':
             return '(tok->tokType() == Token::eLogicalOp && tok->str() == MatchCompiler::makeConstString("||"))'
-        elif tok == '%str%':
+        if tok == '%str%':
             return '(tok->tokType() == Token::eString)'
-        elif tok == '%type%':
+        if tok == '%type%':
             return '(tok->isName() && tok->varId() == 0U)'
-        elif tok == '%name%':
+        if tok == '%name%':
             return 'tok->isName()'
-        elif tok == '%var%':
+        if tok == '%var%':
             return '(tok->varId() != 0)'
-        elif tok == '%varid%':
+        if tok == '%varid%':
             return '(tok->isName() && tok->varId() == varid)'
-        elif (len(tok) > 2) and (tok[0] == "%"):
+        if (len(tok) > 2) and (tok[0] == "%"):
             print("unhandled:" + tok)
         elif tok in tokTypes:
             cond = ' || '.join(['tok->tokType() == Token::{}'.format(tokType) for tokType in tokTypes[tok]])
@@ -679,11 +679,10 @@ class MatchCompiler:
     def convertFile(self, srcname, destname, line_directive):
         self._reset()
 
-        fin = io.open(srcname, "rt", encoding="utf-8")
-        srclines = fin.readlines()
-        fin.close()
+        with io.open(srcname, "rt", encoding="utf-8") as fin:
+            srclines = fin.readlines()
 
-        code = u''
+        code = ''
 
         modified = False
 
@@ -691,6 +690,8 @@ class MatchCompiler:
         for line in srclines:
             if not modified:
                 line_orig = line
+            else:
+                line_orig = None
 
             linenr += 1
             # Compile Token::Match and Token::simpleMatch
@@ -708,28 +709,25 @@ class MatchCompiler:
             code += line
 
         # Compute matchFunctions
-        strFunctions = u''
-        for function in self._rawMatchFunctions:
-            strFunctions += function
+        strFunctions = ''.join(self._rawMatchFunctions)
 
-        lineno = u''
+        lineno = ''
         if line_directive:
-            lineno = u'#line 1 "' + srcname + '"\n'
+            lineno = '#line 1 "' + srcname + '"\n'
 
-        header = u'#include "matchcompiler.h"\n'
-        header += u'#include <string>\n'
-        header += u'#include <cstring>\n'
+        header = '#include "matchcompiler.h"\n'
+        header += '#include <string>\n'
+        header += '#include <cstring>\n'
         if len(self._rawMatchFunctions):
-            header += u'#include "errorlogger.h"\n'
-            header += u'#include "token.h"\n'
+            header += '#include "errorlogger.h"\n'
+            header += '#include "token.h"\n'
 
-        fout = io.open(destname, 'wt', encoding="utf-8")
-        if modified or len(self._rawMatchFunctions):
-            fout.write(header)
-            fout.write(strFunctions)
-        fout.write(lineno)
-        fout.write(code)
-        fout.close()
+        with io.open(destname, 'wt', encoding="utf-8") as fout:
+            if modified or len(self._rawMatchFunctions):
+                fout.write(header)
+                fout.write(strFunctions)
+            fout.write(lineno)
+            fout.write(code)
 
 
 def main():

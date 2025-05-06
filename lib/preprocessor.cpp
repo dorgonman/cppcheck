@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -43,24 +43,22 @@ static bool sameline(const simplecpp::Token *tok1, const simplecpp::Token *tok2)
     return tok1 && tok2 && tok1->location.sameline(tok2->location);
 }
 
-/**
- * Remove heading and trailing whitespaces from the input parameter.
- * If string is all spaces/tabs, return empty string.
- * @param s The string to trim.
- */
-static std::string trim(const std::string& s)
-{
-    const std::string::size_type beg = s.find_first_not_of(" \t");
-    if (beg == std::string::npos)
-        return "";
-    const std::string::size_type end = s.find_last_not_of(" \t");
-    return s.substr(beg, end - beg + 1);
-}
+Directive::Directive(const simplecpp::Location & _loc, std::string _str) :
+    file(_loc.file()),
+    linenr(_loc.line),
+    str(std::move(_str))
+{}
 
-Directive::Directive(std::string _file, const int _linenr, const std::string &_str) :
+Directive::Directive(std::string _file, const int _linenr, std::string _str) :
     file(std::move(_file)),
     linenr(_linenr),
-    str(trim(_str))
+    str(std::move(_str))
+{}
+
+Directive::DirectiveToken::DirectiveToken(const simplecpp::Token & _tok) :
+    line(_tok.location.line),
+    column(_tok.location.col),
+    tokStr(_tok.str())
 {}
 
 char Preprocessor::macroChar = char(1);
@@ -137,6 +135,7 @@ static bool parseInlineSuppressionCommentToken(const simplecpp::Token *tok, std:
         std::vector<SuppressionList::Suppression> suppressions = SuppressionList::parseMultiSuppressComment(comment, &errmsg);
 
         for (SuppressionList::Suppression &s : suppressions) {
+            s.isInline = true;
             s.type = errorType;
             s.lineNumber = tok->location.line;
         }
@@ -154,6 +153,7 @@ static bool parseInlineSuppressionCommentToken(const simplecpp::Token *tok, std:
         if (!s.parseComment(comment, &errmsg))
             return false;
 
+        s.isInline = true;
         s.type = errorType;
         s.lineNumber = tok->location.line;
 
@@ -165,6 +165,21 @@ static bool parseInlineSuppressionCommentToken(const simplecpp::Token *tok, std:
     }
 
     return true;
+}
+
+static std::string getRelativeFilename(const simplecpp::Token* tok, const Settings &settings) {
+    if (!tok)
+        return "";
+    std::string relativeFilename(tok->location.file());
+    if (settings.relativePaths) {
+        for (const std::string & basePath : settings.basePaths) {
+            const std::string bp = basePath + "/";
+            if (relativeFilename.compare(0,bp.size(),bp)==0) {
+                relativeFilename = relativeFilename.substr(bp.size());
+            }
+        }
+    }
+    return Path::simplifyPath(std::move(relativeFilename));
 }
 
 static void addInlineSuppressions(const simplecpp::TokenList &tokens, const Settings &settings, SuppressionList &suppressions, std::list<BadInlineSuppression> &bad)
@@ -207,16 +222,7 @@ static void addInlineSuppressions(const simplecpp::TokenList &tokens, const Sett
             continue;
 
         // Relative filename
-        std::string relativeFilename(tok->location.file());
-        if (settings.relativePaths) {
-            for (const std::string & basePath : settings.basePaths) {
-                const std::string bp = basePath + "/";
-                if (relativeFilename.compare(0,bp.size(),bp)==0) {
-                    relativeFilename = relativeFilename.substr(bp.size());
-                }
-            }
-        }
-        relativeFilename = Path::simplifyPath(relativeFilename);
+        const std::string relativeFilename = getRelativeFilename(tok, settings);
 
         // Macro name
         std::string macroName;
@@ -254,7 +260,7 @@ static void addInlineSuppressions(const simplecpp::TokenList &tokens, const Sett
                             suppr.lineNumber = supprBegin->lineNumber;
                             suppr.type = SuppressionList::Type::block;
                             inlineSuppressionsBlockBegin.erase(supprBegin);
-                            suppressions.addSuppression(std::move(suppr));
+                            suppressions.addSuppression(std::move(suppr)); // TODO: check result
                             throwError = false;
                             break;
                         }
@@ -279,10 +285,10 @@ static void addInlineSuppressions(const simplecpp::TokenList &tokens, const Sett
                 suppr.thisAndNextLine = thisAndNextLine;
                 suppr.lineNumber = tok->location.line;
                 suppr.macroName = macroName;
-                suppressions.addSuppression(std::move(suppr));
+                suppressions.addSuppression(std::move(suppr)); // TODO: check result
             } else if (SuppressionList::Type::file == suppr.type) {
                 if (onlyComments)
-                    suppressions.addSuppression(std::move(suppr));
+                    suppressions.addSuppression(std::move(suppr)); // TODO: check result
                 else
                     bad.emplace_back(suppr.fileName, suppr.lineNumber, "File suppression should be at the top of the file");
             }
@@ -300,13 +306,24 @@ void Preprocessor::inlineSuppressions(const simplecpp::TokenList &tokens, Suppre
         return;
     std::list<BadInlineSuppression> err;
     ::addInlineSuppressions(tokens, mSettings, suppressions, err);
-    for (std::map<std::string,simplecpp::TokenList*>::const_iterator it = mTokenLists.cbegin(); it != mTokenLists.cend(); ++it) {
+    for (auto it = mTokenLists.cbegin(); it != mTokenLists.cend(); ++it) {
         if (it->second)
             ::addInlineSuppressions(*it->second, mSettings, suppressions, err);
     }
     for (const BadInlineSuppression &bad : err) {
         error(bad.file, bad.line, bad.errmsg);
     }
+}
+
+std::vector<RemarkComment> Preprocessor::getRemarkComments(const simplecpp::TokenList &tokens) const
+{
+    std::vector<RemarkComment> ret;
+    addRemarkComments(tokens, ret);
+    for (auto it = mTokenLists.cbegin(); it != mTokenLists.cend(); ++it) {
+        if (it->second)
+            addRemarkComments(*it->second, ret);
+    }
+    return ret;
 }
 
 std::list<Directive> Preprocessor::createDirectives(const simplecpp::TokenList &tokens) const
@@ -317,7 +334,7 @@ std::list<Directive> Preprocessor::createDirectives(const simplecpp::TokenList &
     std::vector<const simplecpp::TokenList *> list;
     list.reserve(1U + mTokenLists.size());
     list.push_back(&tokens);
-    for (std::map<std::string, simplecpp::TokenList *>::const_iterator it = mTokenLists.cbegin(); it != mTokenLists.cend(); ++it) {
+    for (auto it = mTokenLists.cbegin(); it != mTokenLists.cend(); ++it) {
         list.push_back(it->second);
     }
 
@@ -327,7 +344,7 @@ std::list<Directive> Preprocessor::createDirectives(const simplecpp::TokenList &
                 continue;
             if (tok->next && tok->next->str() == "endfile")
                 continue;
-            Directive directive(tok->location.file(), tok->location.line, emptyString);
+            Directive directive(tok->location, "");
             for (const simplecpp::Token *tok2 = tok; tok2 && tok2->location.line == directive.linenr; tok2 = tok2->next) {
                 if (tok2->comment)
                     continue;
@@ -337,6 +354,8 @@ std::list<Directive> Preprocessor::createDirectives(const simplecpp::TokenList &
                     directive.str += "include";
                 else
                     directive.str += tok2->str();
+
+                directive.strTokens.emplace_back(*tok2);
             }
             directives.push_back(std::move(directive));
         }
@@ -472,7 +491,7 @@ static bool isUndefined(const std::string &cfg, const std::set<std::string> &und
 static bool getConfigsElseIsFalse(const std::vector<std::string> &configs_if, const std::string &userDefines)
 {
     return std::any_of(configs_if.cbegin(), configs_if.cend(),
-                       [=](const std::string &cfg) {
+                       [&](const std::string &cfg) {
         return hasDefine(userDefines, cfg);
     });
 }
@@ -527,7 +546,7 @@ static void getConfigs(const simplecpp::TokenList &tokens, std::set<std::string>
                 ifndef = true;
             else {
                 const std::array<std::string, 6> match{"if", "!", "defined", "(", config, ")"};
-                int i = 0;
+                std::size_t i = 0;
                 ifndef = true;
                 for (const simplecpp::Token *t = cmdtok; i < match.size(); t = t->next) {
                     if (!t || t->str() != match[i++]) {
@@ -647,7 +666,7 @@ std::set<std::string> Preprocessor::getConfigs(const simplecpp::TokenList &token
 
     ::getConfigs(tokens, defined, mSettings.userDefines, mSettings.userUndefs, ret);
 
-    for (std::map<std::string, simplecpp::TokenList*>::const_iterator it = mTokenLists.cbegin(); it != mTokenLists.cend(); ++it) {
+    for (auto it = mTokenLists.cbegin(); it != mTokenLists.cend(); ++it) {
         if (!mSettings.configurationExcluded(it->first))
             ::getConfigs(*(it->second), defined, mSettings.userDefines, mSettings.userUndefs, ret);
     }
@@ -676,9 +695,9 @@ static simplecpp::DUI createDUI(const Settings &mSettings, const std::string &cf
 
     splitcfg(mSettings.userDefines, dui.defines, "1");
     if (!cfg.empty())
-        splitcfg(cfg, dui.defines, emptyString);
+        splitcfg(cfg, dui.defines, "");
 
-    for (const std::string &def : mSettings.library.defines) {
+    for (const std::string &def : mSettings.library.defines()) {
         const std::string::size_type pos = def.find_first_of(" (");
         if (pos == std::string::npos) {
             dui.defines.push_back(def);
@@ -698,7 +717,7 @@ static simplecpp::DUI createDUI(const Settings &mSettings, const std::string &cf
     dui.includes = mSettings.userIncludes;  // --include
     // TODO: use mSettings.standards.stdValue instead
     // TODO: error out on unknown language?
-    const Standards::Language lang = Path::identify(filename);
+    const Standards::Language lang = Path::identify(filename, mSettings.cppHeaderProbe);
     if (lang == Standards::Language::CPP) {
         dui.std = mSettings.standards.getCPP();
         splitcfg(mSettings.platform.getLimitsDefines(Standards::getCPP(dui.std)), dui.defines, "");
@@ -720,6 +739,7 @@ bool Preprocessor::hasErrors(const simplecpp::Output &output)
     case simplecpp::Output::UNHANDLED_CHAR_ERROR:
     case simplecpp::Output::EXPLICIT_INCLUDE_NOT_FOUND:
     case simplecpp::Output::FILE_NOT_FOUND:
+    case simplecpp::Output::DUI_ERROR:
         return true;
     case simplecpp::Output::WARNING:
     case simplecpp::Output::MISSING_HEADER:
@@ -753,7 +773,7 @@ void Preprocessor::handleErrors(const simplecpp::OutputList& outputList, bool th
 
 bool Preprocessor::loadFiles(const simplecpp::TokenList &rawtokens, std::vector<std::string> &files)
 {
-    const simplecpp::DUI dui = createDUI(mSettings, emptyString, files[0]);
+    const simplecpp::DUI dui = createDUI(mSettings, "", files[0]);
 
     simplecpp::OutputList outputList;
     mTokenLists = simplecpp::load(rawtokens, files, dui, &outputList);
@@ -761,32 +781,33 @@ bool Preprocessor::loadFiles(const simplecpp::TokenList &rawtokens, std::vector<
     return !hasErrors(outputList);
 }
 
-void Preprocessor::removeComments()
+void Preprocessor::removeComments(simplecpp::TokenList &tokens)
 {
+    tokens.removeComments();
     for (std::pair<const std::string, simplecpp::TokenList*>& tokenList : mTokenLists) {
         if (tokenList.second)
             tokenList.second->removeComments();
     }
 }
 
-void Preprocessor::setPlatformInfo(simplecpp::TokenList *tokens) const
+void Preprocessor::setPlatformInfo(simplecpp::TokenList &tokens, const Settings& settings)
 {
-    tokens->sizeOfType["bool"]          = mSettings.platform.sizeof_bool;
-    tokens->sizeOfType["short"]         = mSettings.platform.sizeof_short;
-    tokens->sizeOfType["int"]           = mSettings.platform.sizeof_int;
-    tokens->sizeOfType["long"]          = mSettings.platform.sizeof_long;
-    tokens->sizeOfType["long long"]     = mSettings.platform.sizeof_long_long;
-    tokens->sizeOfType["float"]         = mSettings.platform.sizeof_float;
-    tokens->sizeOfType["double"]        = mSettings.platform.sizeof_double;
-    tokens->sizeOfType["long double"]   = mSettings.platform.sizeof_long_double;
-    tokens->sizeOfType["bool *"]        = mSettings.platform.sizeof_pointer;
-    tokens->sizeOfType["short *"]       = mSettings.platform.sizeof_pointer;
-    tokens->sizeOfType["int *"]         = mSettings.platform.sizeof_pointer;
-    tokens->sizeOfType["long *"]        = mSettings.platform.sizeof_pointer;
-    tokens->sizeOfType["long long *"]   = mSettings.platform.sizeof_pointer;
-    tokens->sizeOfType["float *"]       = mSettings.platform.sizeof_pointer;
-    tokens->sizeOfType["double *"]      = mSettings.platform.sizeof_pointer;
-    tokens->sizeOfType["long double *"] = mSettings.platform.sizeof_pointer;
+    tokens.sizeOfType["bool"]          = settings.platform.sizeof_bool;
+    tokens.sizeOfType["short"]         = settings.platform.sizeof_short;
+    tokens.sizeOfType["int"]           = settings.platform.sizeof_int;
+    tokens.sizeOfType["long"]          = settings.platform.sizeof_long;
+    tokens.sizeOfType["long long"]     = settings.platform.sizeof_long_long;
+    tokens.sizeOfType["float"]         = settings.platform.sizeof_float;
+    tokens.sizeOfType["double"]        = settings.platform.sizeof_double;
+    tokens.sizeOfType["long double"]   = settings.platform.sizeof_long_double;
+    tokens.sizeOfType["bool *"]        = settings.platform.sizeof_pointer;
+    tokens.sizeOfType["short *"]       = settings.platform.sizeof_pointer;
+    tokens.sizeOfType["int *"]         = settings.platform.sizeof_pointer;
+    tokens.sizeOfType["long *"]        = settings.platform.sizeof_pointer;
+    tokens.sizeOfType["long long *"]   = settings.platform.sizeof_pointer;
+    tokens.sizeOfType["float *"]       = settings.platform.sizeof_pointer;
+    tokens.sizeOfType["double *"]      = settings.platform.sizeof_pointer;
+    tokens.sizeOfType["long double *"] = settings.platform.sizeof_pointer;
 }
 
 simplecpp::TokenList Preprocessor::preprocess(const simplecpp::TokenList &tokens1, const std::string &cfg, std::vector<std::string> &files, bool throwError)
@@ -860,7 +881,8 @@ void Preprocessor::reportOutput(const simplecpp::OutputList &outputList, bool sh
             break;
         case simplecpp::Output::EXPLICIT_INCLUDE_NOT_FOUND:
         case simplecpp::Output::FILE_NOT_FOUND:
-            error(emptyString, 0, out.msg);
+        case simplecpp::Output::DUI_ERROR:
+            error("", 0, out.msg);
             break;
         }
     }
@@ -906,9 +928,9 @@ void Preprocessor::missingInclude(const std::string &filename, unsigned int line
 void Preprocessor::getErrorMessages(ErrorLogger &errorLogger, const Settings &settings)
 {
     Preprocessor preprocessor(settings, errorLogger);
-    preprocessor.missingInclude(emptyString, 1, emptyString, UserHeader);
-    preprocessor.missingInclude(emptyString, 1, emptyString, SystemHeader);
-    preprocessor.error(emptyString, 1, "#error message");   // #error ..
+    preprocessor.missingInclude("", 1, "", UserHeader);
+    preprocessor.missingInclude("", 1, "", SystemHeader);
+    preprocessor.error("", 1, "#error message");   // #error ..
 }
 
 void Preprocessor::dump(std::ostream &out) const
@@ -951,30 +973,36 @@ std::size_t Preprocessor::calculateHash(const simplecpp::TokenList &tokens1, con
 {
     std::string hashData = toolinfo;
     for (const simplecpp::Token *tok = tokens1.cfront(); tok; tok = tok->next) {
-        if (!tok->comment)
+        if (!tok->comment) {
             hashData += tok->str();
+            hashData += static_cast<char>(tok->location.line);
+            hashData += static_cast<char>(tok->location.col);
+        }
     }
-    for (std::map<std::string, simplecpp::TokenList *>::const_iterator it = mTokenLists.cbegin(); it != mTokenLists.cend(); ++it) {
+    for (auto it = mTokenLists.cbegin(); it != mTokenLists.cend(); ++it) {
         for (const simplecpp::Token *tok = it->second->cfront(); tok; tok = tok->next) {
-            if (!tok->comment)
+            if (!tok->comment) {
                 hashData += tok->str();
+                hashData += static_cast<char>(tok->location.line);
+                hashData += static_cast<char>(tok->location.col);
+            }
         }
     }
     return (std::hash<std::string>{})(hashData);
 }
 
-void Preprocessor::simplifyPragmaAsm(simplecpp::TokenList *tokenList) const
+void Preprocessor::simplifyPragmaAsm(simplecpp::TokenList &tokenList) const
 {
     Preprocessor::simplifyPragmaAsmPrivate(tokenList);
     for (const std::pair<const std::string, simplecpp::TokenList*>& list : mTokenLists) {
-        Preprocessor::simplifyPragmaAsmPrivate(list.second);
+        Preprocessor::simplifyPragmaAsmPrivate(*list.second);
     }
 }
 
-void Preprocessor::simplifyPragmaAsmPrivate(simplecpp::TokenList *tokenList)
+void Preprocessor::simplifyPragmaAsmPrivate(simplecpp::TokenList &tokenList)
 {
     // assembler code..
-    for (simplecpp::Token *tok = tokenList->front(); tok; tok = tok->next) {
+    for (simplecpp::Token *tok = tokenList.front(); tok; tok = tok->next) {
         if (tok->op != '#')
             continue;
         if (sameline(tok, tok->previousSkipComments()))
@@ -1009,6 +1037,57 @@ void Preprocessor::simplifyPragmaAsmPrivate(simplecpp::TokenList *tokenList)
         const_cast<simplecpp::Token *>(tok3)->setstr(")");
         const_cast<simplecpp::Token *>(tok4)->setstr(";");
         while (tok4->next != endasm)
-            tokenList->deleteToken(tok4->next);
+            tokenList.deleteToken(tok4->next);
+    }
+}
+
+
+void Preprocessor::addRemarkComments(const simplecpp::TokenList &tokens, std::vector<RemarkComment> &remarkComments) const
+{
+    for (const simplecpp::Token *tok = tokens.cfront(); tok; tok = tok->next) {
+        if (!tok->comment)
+            continue;
+
+        const std::string& comment = tok->str();
+
+        // is it a remark comment?
+        const std::string::size_type pos1 = comment.find_first_not_of("/* \t");
+        if (pos1 == std::string::npos)
+            continue;
+        const std::string::size_type pos2 = comment.find_first_of(": \t", pos1);
+        if (pos2 != pos1 + 6 || comment.compare(pos1, 6, "REMARK") != 0)
+            continue;
+        const std::string::size_type pos3 = comment.find_first_not_of(": \t", pos2);
+        if (pos3 == std::string::npos)
+            continue;
+        if (comment.compare(0,2,"/*") == 0 && pos3 + 2 >= tok->str().size())
+            continue;
+
+        const std::string::size_type pos4 = (comment.compare(0,2,"/*") == 0) ? comment.size()-2 : comment.size();
+        const std::string remarkText = comment.substr(pos3, pos4-pos3);
+
+        // Get remarked token
+        const simplecpp::Token* remarkedToken = nullptr;
+        for (const simplecpp::Token* after = tok->next; after; after = after->next) {
+            if (after->comment)
+                continue;
+            remarkedToken = after;
+            break;
+        }
+        for (const simplecpp::Token* prev = tok->previous; prev; prev = prev->previous) {
+            if (prev->comment)
+                continue;
+            if (sameline(prev, tok))
+                remarkedToken = prev;
+            break;
+        }
+        if (!remarkedToken)
+            continue;
+
+        // Relative filename
+        const std::string relativeFilename = getRelativeFilename(remarkedToken, mSettings);
+
+        // Add the suppressions.
+        remarkComments.emplace_back(relativeFilename, remarkedToken->location.line, remarkText);
     }
 }

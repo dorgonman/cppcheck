@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,6 +29,9 @@
 #include "symboldatabase.h"
 #include "token.h"
 #include "tokenize.h"
+#include "tokenlist.h"
+#include "utils.h"
+#include "vfvalue.h"
 
 #include "checknullpointer.h"   // CheckNullPointer::isPointerDeref
 
@@ -40,11 +43,6 @@
 #include <map>
 #include <unordered_set>
 #include <vector>
-
-
-namespace tinyxml2 {
-    class XMLElement;
-}
 
 //---------------------------------------------------------------------------
 
@@ -253,7 +251,7 @@ void CheckUninitVar::checkStruct(const Token *tok, const Variable &structvar)
                 // is the variable declared in a inner union?
                 bool innerunion = false;
                 for (const Scope *innerScope : scope2->nestedList) {
-                    if (innerScope->type == Scope::eUnion) {
+                    if (innerScope->type == ScopeType::eUnion) {
                         if (var.typeStartToken()->linenr() >= innerScope->bodyStart->linenr() &&
                             var.typeStartToken()->linenr() <= innerScope->bodyEnd->linenr()) {
                             innerunion = true;
@@ -294,8 +292,8 @@ static void conditionAlwaysTrueOrFalse(const Token *tok, const std::map<nonneg i
     if (!tok)
         return;
 
-    if (tok->hasKnownIntValue()) {
-        if (tok->getKnownIntValue() == 0)
+    if (const ValueFlow::Value* v = tok->getKnownValue(ValueFlow::Value::ValueType::INT)) {
+        if (v->intvalue == 0)
             *alwaysFalse = true;
         else
             *alwaysTrue = true;
@@ -305,7 +303,7 @@ static void conditionAlwaysTrueOrFalse(const Token *tok, const std::map<nonneg i
     if (tok->isName() || tok->str() == ".") {
         while (tok && tok->str() == ".")
             tok = tok->astOperand2();
-        const std::map<nonneg int, VariableValue>::const_iterator it = variableValue.find(tok ? tok->varId() : ~0U);
+        const auto it = utils::as_const(variableValue).find(tok ? tok->varId() : ~0U);
         if (it != variableValue.end()) {
             *alwaysTrue = (it->second != 0LL);
             *alwaysFalse = (it->second == 0LL);
@@ -331,14 +329,14 @@ static void conditionAlwaysTrueOrFalse(const Token *tok, const std::map<nonneg i
         while (vartok && vartok->str() == ".")
             vartok = vartok->astOperand2();
 
-        const std::map<nonneg int, VariableValue>::const_iterator it = variableValue.find(vartok ? vartok->varId() : ~0U);
+        const auto it = utils::as_const(variableValue).find(vartok ? vartok->varId() : ~0U);
         if (it == variableValue.end())
             return;
 
         if (tok->str() == "==")
-            *alwaysTrue  = (it->second == MathLib::toBigNumber(numtok->str()));
+            *alwaysTrue  = (it->second == MathLib::toBigNumber(numtok));
         else if (tok->str() == "!=")
-            *alwaysTrue  = (it->second != MathLib::toBigNumber(numtok->str()));
+            *alwaysTrue  = (it->second != MathLib::toBigNumber(numtok));
         else
             return;
         *alwaysFalse = !(*alwaysTrue);
@@ -467,7 +465,7 @@ bool CheckUninitVar::checkScopeForVariable(const Token *tok, const Variable& var
             conditionAlwaysTrueOrFalse(tok->next()->astOperand2(), variableValue, &alwaysTrue, &alwaysFalse);
 
             // initialization / usage in condition..
-            if (!alwaysTrue && checkIfForWhileHead(tok->next(), var, suppressErrors, bool(number_of_if == 0), *alloc, membervar))
+            if (!alwaysTrue && checkIfForWhileHead(tok->next(), var, suppressErrors, (number_of_if == 0), *alloc, membervar))
                 return true;
 
             // checking if a not-zero variable is zero => bail out
@@ -477,7 +475,7 @@ bool CheckUninitVar::checkScopeForVariable(const Token *tok, const Variable& var
             if (alwaysFalse)
                 ;
             else if (astIsVariableComparison(tok->next()->astOperand2(), "!=", "0", &condVarTok)) {
-                const std::map<nonneg int,VariableValue>::const_iterator it = variableValue.find(condVarTok->varId());
+                const auto it = utils::as_const(variableValue).find(condVarTok->varId());
                 if (it != variableValue.cend() && it->second != 0)
                     return true;   // this scope is not fully analysed => return true
 
@@ -492,7 +490,7 @@ bool CheckUninitVar::checkScopeForVariable(const Token *tok, const Variable& var
                 while (Token::simpleMatch(vartok, "."))
                     vartok = vartok->astOperand2();
                 if (vartok && vartok->varId() && numtok && numtok->hasKnownIntValue()) {
-                    const std::map<nonneg int,VariableValue>::const_iterator it = variableValue.find(vartok->varId());
+                    const auto it = utils::as_const(variableValue).find(vartok->varId());
                     if (it != variableValue.cend() && it->second != numtok->getKnownIntValue())
                         return true;   // this scope is not fully analysed => return true
                     condVarId = vartok->varId();
@@ -503,7 +501,7 @@ bool CheckUninitVar::checkScopeForVariable(const Token *tok, const Variable& var
             }
 
             // goto the {
-            tok = tok->next()->link()->next();
+            tok = tok->linkAt(1)->next();
 
             if (!tok)
                 break;
@@ -583,7 +581,7 @@ bool CheckUninitVar::checkScopeForVariable(const Token *tok, const Variable& var
         // = { .. }
         else if (Token::simpleMatch(tok, "= {") || (Token::Match(tok, "%name% {") && tok->variable() && tok == tok->variable()->nameToken())) {
             // end token
-            const Token *end = tok->next()->link();
+            const Token *end = tok->linkAt(1);
 
             // If address of variable is taken in the block then bail out
             if (var.isPointer() || var.isArray()) {
@@ -630,7 +628,7 @@ bool CheckUninitVar::checkScopeForVariable(const Token *tok, const Variable& var
                 return true;
 
             // goto the {
-            const Token *tok2 = forwhile ? tok->next()->link()->next() : tok->next();
+            const Token *tok2 = forwhile ? tok->linkAt(1)->next() : tok->next();
 
             if (tok2 && tok2->str() == "{") {
                 const bool init = checkLoopBody(tok2, var, *alloc, membervar, (number_of_if > 0) || suppressErrors);
@@ -642,8 +640,8 @@ bool CheckUninitVar::checkScopeForVariable(const Token *tok, const Variable& var
                 // is variable used in for-head?
                 bool initcond = false;
                 if (!suppressErrors) {
-                    const Token *startCond = forwhile ? tok->next() : tok->next()->link()->tokAt(2);
-                    initcond = checkIfForWhileHead(startCond, var, false, bool(number_of_if == 0), *alloc, membervar);
+                    const Token *startCond = forwhile ? tok->next() : tok->linkAt(1)->tokAt(2);
+                    initcond = checkIfForWhileHead(startCond, var, false, (number_of_if == 0), *alloc, membervar);
                 }
 
                 // goto "}"
@@ -654,7 +652,7 @@ bool CheckUninitVar::checkScopeForVariable(const Token *tok, const Variable& var
                     // Assert that the tokens are '} while ('
                     if (!Token::simpleMatch(tok, "} while (")) {
                         if (printDebug)
-                            reportError(tok,Severity::debug,emptyString,"assertion failed '} while ('");
+                            reportError(tok,Severity::debug,"","assertion failed '} while ('");
                         break;
                     }
 
@@ -916,7 +914,7 @@ bool CheckUninitVar::checkIfForWhileHead(const Token *startparentheses, const Va
 }
 
 /** recursively check loop, return error token */
-const Token* CheckUninitVar::checkLoopBodyRecursive(const Token *start, const Variable& var, const Alloc alloc, const std::string &membervar, bool &bailout) const
+const Token* CheckUninitVar::checkLoopBodyRecursive(const Token *start, const Variable& var, const Alloc alloc, const std::string &membervar, bool &bailout, bool &alwaysReturns) const
 {
     assert(start->str() == "{");
 
@@ -941,9 +939,10 @@ const Token* CheckUninitVar::checkLoopBodyRecursive(const Token *start, const Va
             if (!Token::simpleMatch(top->previous(), "for (") || !Token::simpleMatch(top->link(), ") {"))
                 continue;
             const Token *bodyStart = top->link()->next();
-            const Token *errorToken1 = checkLoopBodyRecursive(bodyStart, var, alloc, membervar, bailout);
+            const Token *errorToken1 = checkLoopBodyRecursive(bodyStart, var, alloc, membervar, bailout, alwaysReturns);
             if (!errorToken)
                 errorToken = errorToken1;
+            bailout |= alwaysReturns;
             if (bailout)
                 return nullptr;
         }
@@ -957,16 +956,17 @@ const Token* CheckUninitVar::checkLoopBodyRecursive(const Token *start, const Va
 
         if (tok->str() == "{") {
             // switch => bailout
-            if (tok->scope() && tok->scope()->type == Scope::ScopeType::eSwitch) {
+            if (tok->scope() && tok->scope()->type == ScopeType::eSwitch) {
                 bailout = true;
                 return nullptr;
             }
 
-            const Token *errorToken1 = checkLoopBodyRecursive(tok, var, alloc, membervar, bailout);
+            bool alwaysReturnsUnused;
+            const Token *errorToken1 = checkLoopBodyRecursive(tok, var, alloc, membervar, bailout, alwaysReturnsUnused);
             tok = tok->link();
             if (Token::simpleMatch(tok, "} else {")) {
                 const Token *elseBody = tok->tokAt(2);
-                const Token *errorToken2 = checkLoopBodyRecursive(elseBody, var, alloc, membervar, bailout);
+                const Token *errorToken2 = checkLoopBodyRecursive(elseBody, var, alloc, membervar, bailout, alwaysReturnsUnused);
                 tok = elseBody->link();
                 if (errorToken1 && errorToken2)
                     return errorToken1;
@@ -978,6 +978,23 @@ const Token* CheckUninitVar::checkLoopBodyRecursive(const Token *start, const Va
             if (!errorToken)
                 errorToken = errorToken1;
         }
+
+        if (Token::simpleMatch(tok, "return")) {
+            bool returnWithoutVar = true;
+            while (tok && !Token::simpleMatch(tok, ";")) {
+                if (tok->isVariable() && tok->variable() == &var) {
+                    returnWithoutVar = false;
+                    break;
+                }
+                tok = tok->next();
+            }
+            if (returnWithoutVar) {
+                alwaysReturns = true;
+                return nullptr;
+            }
+        }
+        if (!tok)
+            break;
 
         if (tok->varId() != var.declarationId())
             continue;
@@ -1068,9 +1085,10 @@ const Token* CheckUninitVar::checkLoopBodyRecursive(const Token *start, const Va
 bool CheckUninitVar::checkLoopBody(const Token *tok, const Variable& var, const Alloc alloc, const std::string &membervar, const bool suppressErrors)
 {
     bool bailout = false;
-    const Token *errorToken = checkLoopBodyRecursive(tok, var, alloc, membervar, bailout);
+    bool alwaysReturns = false;
+    const Token *errorToken = checkLoopBodyRecursive(tok, var, alloc, membervar, bailout, alwaysReturns);
 
-    if (!suppressErrors && !bailout && errorToken) {
+    if (!suppressErrors && !bailout && !alwaysReturns && errorToken) {
         if (membervar.empty())
             uninitvarError(errorToken, errorToken->expressionString(), alloc);
         else
@@ -1078,7 +1096,7 @@ bool CheckUninitVar::checkLoopBody(const Token *tok, const Variable& var, const 
         return true;
     }
 
-    return bailout;
+    return bailout || alwaysReturns;
 }
 
 void CheckUninitVar::checkRhs(const Token *tok, const Variable &var, Alloc alloc, nonneg int number_of_if, const std::string &membervar)
@@ -1373,7 +1391,7 @@ int CheckUninitVar::isFunctionParUsage(const Token *vartok, const Library& libra
 
     // is this a function call?
     if (Token::Match(start->previous(), "%name% (")) {
-        const bool address(vartok->previous()->str() == "&");
+        const bool address(vartok->strAt(-1) == "&");
         const bool array(vartok->variable() && vartok->variable()->isArray());
         // check how function handle uninitialized data arguments..
         const Function *func = start->previous()->function();
@@ -1641,10 +1659,16 @@ void CheckUninitVar::valueFlowUninit()
                     const bool isarray = tok->variable()->isArray();
                     if (isarray && tok->variable()->isMember())
                         continue; // Todo: this is a bailout
+                    if (isarray && tok->variable()->isStlType() && Token::simpleMatch(tok->astParent(), ".")) {
+                        const auto yield = astContainerYield(tok, mSettings->library);
+                        if (yield != Library::Container::Yield::AT_INDEX && yield != Library::Container::Yield::ITEM)
+                            continue;
+                    }
                     const bool deref = CheckNullPointer::isPointerDeRef(tok, unknown, *mSettings);
                     uninitderef = deref && v->indirect == 0;
                     const bool isleaf = isLeafDot(tok) || uninitderef;
-                    if (!isleaf && Token::Match(tok->astParent(), ". %name%") && (tok->astParent()->next()->varId() || tok->astParent()->next()->isEnumerator()))
+                    if (!isleaf && Token::Match(tok->astParent(), ". %name%") &&
+                        (tok->astParent()->next()->variable() || tok->astParent()->next()->isEnumerator()))
                         continue;
                 }
                 const ExprUsage usage = getExprUsage(tok, v->indirect, *mSettings);
@@ -1654,10 +1678,10 @@ void CheckUninitVar::valueFlowUninit()
                     continue;
                 if (usage != ExprUsage::Used) {
                     if (!(Token::Match(tok->astParent(), ". %name% (|[") && uninitderef) &&
-                        isVariableChanged(tok, v->indirect, mSettings))
+                        isVariableChanged(tok, v->indirect, *mSettings))
                         continue;
                     bool inconclusive = false;
-                    if (isVariableChangedByFunctionCall(tok, v->indirect, mSettings, &inconclusive) || inconclusive)
+                    if (isVariableChangedByFunctionCall(tok, v->indirect, *mSettings, &inconclusive) || inconclusive)
                         continue;
                 }
                 uninitvarError(tok, *v);
@@ -1687,6 +1711,7 @@ namespace
     /* data for multifile checking */
     class MyFileInfo : public Check::FileInfo {
     public:
+        using Check::FileInfo::FileInfo;
         /** function arguments that data are unconditionally read */
         std::list<CTU::FileInfo::UnsafeUsage> unsafeUsage;
 
@@ -1698,13 +1723,17 @@ namespace
     };
 }
 
+static bool isVariableUsage(const Settings &settings, const Token *argtok, CTU::FileInfo::Value *value) {
+    return isVariableUsage(settings, argtok, &value->value);
+}
+
 Check::FileInfo *CheckUninitVar::getFileInfo(const Tokenizer &tokenizer, const Settings &settings) const
 {
     const std::list<CTU::FileInfo::UnsafeUsage> &unsafeUsage = CTU::getUnsafeUsage(tokenizer, settings, ::isVariableUsage);
     if (unsafeUsage.empty())
         return nullptr;
 
-    auto *fileInfo = new MyFileInfo;
+    auto *fileInfo = new MyFileInfo(tokenizer.list.getFiles()[0]);
     fileInfo->unsafeUsage = unsafeUsage;
     return fileInfo;
 }
@@ -1720,17 +1749,23 @@ Check::FileInfo * CheckUninitVar::loadFileInfoFromXml(const tinyxml2::XMLElement
     return fileInfo;
 }
 
-bool CheckUninitVar::analyseWholeProgram(const CTU::FileInfo *ctu, const std::list<Check::FileInfo*> &fileInfo, const Settings& settings, ErrorLogger &errorLogger)
+bool CheckUninitVar::analyseWholeProgram(const CTU::FileInfo &ctu, const std::list<Check::FileInfo*> &fileInfo, const Settings& settings, ErrorLogger &errorLogger)
 {
-    if (!ctu)
-        return false;
-    bool foundErrors = false;
-    (void)settings; // This argument is unused
+    (void)settings;
 
-    const std::map<std::string, std::list<const CTU::FileInfo::CallBase *>> callsMap = ctu->getCallsMap();
+    CheckUninitVar dummy(nullptr, &settings, &errorLogger);
+    dummy.
+    logChecker("CheckUninitVar::analyseWholeProgram");
+
+    if (fileInfo.empty())
+        return false;
+
+    const std::map<std::string, std::list<const CTU::FileInfo::CallBase *>> callsMap = ctu.getCallsMap();
+
+    bool foundErrors = false;
 
     for (const Check::FileInfo* fi1 : fileInfo) {
-        const MyFileInfo *fi = dynamic_cast<const MyFileInfo*>(fi1);
+        const auto *fi = dynamic_cast<const MyFileInfo*>(fi1);
         if (!fi)
             continue;
         for (const CTU::FileInfo::UnsafeUsage &unsafeUsage : fi->unsafeUsage) {
@@ -1742,12 +1777,13 @@ bool CheckUninitVar::analyseWholeProgram(const CTU::FileInfo *ctu, const std::li
                                             callsMap,
                                             "Using argument ARG",
                                             &functionCall,
-                                            false);
+                                            false,
+                                            settings.maxCtuDepth);
             if (locationList.empty())
                 continue;
 
             const ErrorMessage errmsg(locationList,
-                                      emptyString,
+                                      fi->file0,
                                       Severity::error,
                                       "Using argument " + unsafeUsage.myArgumentName + " that points at uninitialized variable " + functionCall->callArgumentExpression,
                                       "ctuuninitvar",
@@ -1759,4 +1795,22 @@ bool CheckUninitVar::analyseWholeProgram(const CTU::FileInfo *ctu, const std::li
         }
     }
     return foundErrors;
+}
+
+void CheckUninitVar::runChecks(const Tokenizer &tokenizer, ErrorLogger *errorLogger)
+{
+    CheckUninitVar checkUninitVar(&tokenizer, &tokenizer.getSettings(), errorLogger);
+    checkUninitVar.valueFlowUninit();
+    checkUninitVar.check();
+}
+
+void CheckUninitVar::getErrorMessages(ErrorLogger* errorLogger, const Settings* settings) const
+{
+    CheckUninitVar c(nullptr, settings, errorLogger);
+
+    ValueFlow::Value v{};
+
+    c.uninitvarError(nullptr, v);
+    c.uninitdataError(nullptr, "varname");
+    c.uninitStructMemberError(nullptr, "a.b");
 }

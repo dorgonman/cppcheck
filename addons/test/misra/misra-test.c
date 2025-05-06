@@ -2,6 +2,8 @@
 // ~/cppcheck/cppcheck --dump misra/misra-test.h --std=c89
 // ~/cppcheck/cppcheck --dump -DDUMMY --suppress=uninitvar --inline-suppr misra/misra-test.c --std=c89 --platform=unix64 && python3 ../misra.py -verify misra/misra-test.c.dump
 
+#pragma ghs section rodata=default // no warning
+
 #include "path\file.h" // 20.2
 #include "file//.h" // 20.2
 #include "file/*.h" // 20.2
@@ -35,8 +37,8 @@
 
 #include <setjmp.h> // 21.4
 #include <signal.h> // 21.5
-#include <stdio.h> //21.6
-#include <wchar.h> //21.6
+#include <stdio.h>
+#include <wchar.h>
 #include <time.h> // 21.10
 #include <tgmath.h> // 21.11
 #include <fenv.h>
@@ -132,7 +134,7 @@ static void misra_3_2(int enable)
         ++y;    // This is hidden if trigraph replacement is active
     }
 
-    (void)printf("x=%i, y=%i\n", x, y);
+    (void)printf("x=%i, y=%i\n", x, y); //21.6
 }
 
 extern int misra_5_1_extern_var_hides_var_x;
@@ -207,9 +209,9 @@ int c41_15         = 'a'; // 10.3 8.4
 
 static void misra_4_1(void)
 {
-    (void)printf("\x41g"); // 4.1
-    (void)printf("\x41\x42");
-    (void)printf("\x41" "g");
+    (void)printf("\x41g"); // 4.1 21.6
+    (void)printf("\x41\x42"); //21.6
+    (void)printf("\x41" "g"); //21.6
 }
 
 const char *s42_1 = "String containing trigraphs ??-??-??";   // 4.2 8.4
@@ -218,8 +220,8 @@ const char *s42_3 = "No trigraph?(?'?)"; // 8.4
 
 static void misra_4_2(void)
 {
-    (void)printf("??=Trigraph\n");   // 4.2
-    (void)printf("No?/Trigraph\n");
+    (void)printf("??=Trigraph\n");   // 4.2 21.6
+    (void)printf("No?/Trigraph\n"); //21.6
 }
 
 #define misra_5_4_macro_hides_macro__31x 1
@@ -401,6 +403,8 @@ uint8_t misra_8_4_pressure = 101u; //8.4
 int32_t misra_8_4_ext_val2;
 int32_t misra_8_4_ext_val2 = 3; // compliant
 int32_t misra_8_4_ext_val4; //8.4
+// #12978
+const stError_t * m8_4_pubTestPointer; //compliant
 
 static int32_t misra_8_8 = 123;
 extern int32_t misra_8_8; // 8.8
@@ -961,7 +965,7 @@ void misra_12_3(int a, int b, int c) {
   int a41 = MISRA_12_3_FN3_2(a34, a35), a42; // 12.3
   int a43, a44 = MISRA_12_3_FN3_2(a34, a35); // 12.3
 
-  MISRA_12_3_FN3_2_MSG(fprintf(stderr, "test\n")); // 12.3
+  MISRA_12_3_FN3_2_MSG(fprintf(stderr, "test\n")); // 12.3 21.6
 
   f((1,2),3); // TODO
 
@@ -1229,7 +1233,34 @@ static void misra_14_1(void) {
   } while ( a < 10.0f );  // no-warning
 
 }
+//13143
+static bool misra_14_1_is_increasing (const double* const x, const size_t n)
+{
+    double last = -INFINITY;
+    size_t i = ((size_t) 0);
+    while ((i < n) && isfinite(x[i]) && (x[i] > last)) { //no-warning for 14_1
+       last = x[i];
+       i++;
+    }
+    return i == n;
+}
 
+static void misra_14_1_compliant1_foo(float x){
+    int i = 0;
+    while(i < x){ // 10.4
+        i += x + x; // 10.3 10.4 no-warning for 14_1
+    }
+}
+
+static void misra_14_1_compliant2_foo(void){
+    int i = 0;
+    float f = 0f;
+    while (f < 10 && i < 10) { //10.4 12.1
+        float f = 0f;
+        f = f + i; // 10.3 10.4 no warning for 14_1
+        i++;
+    }
+}
 static void misra_14_2_init_value(int32_t *var) {
     *var = 0;
 }

@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2023 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -113,5 +113,5 @@ QStringList CheckStatistics::getTools() const
     for (const QString& tool: mPerformance.keys()) ret.insert(tool);
     for (const QString& tool: mPortability.keys()) ret.insert(tool);
     for (const QString& tool: mError.keys()) ret.insert(tool);
-    return QStringList(ret.values());
+    return ret.values();
 }

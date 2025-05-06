@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2023 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
 #include "resultsview.h"
 #include "settings.h"
 
+#include <algorithm>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -51,6 +52,7 @@ void ThreadHandler::clearFiles()
     mLastFiles.clear();
     mResults.clearFiles();
     mAnalyseWholeProgram = false;
+    mCtuInfo.clear();
     mAddonsAndTools.clear();
     mSuppressions.clear();
 }
@@ -81,7 +83,7 @@ void ThreadHandler::setCheckFiles(const QStringList& files)
     }
 }
 
-void ThreadHandler::check(const Settings &settings)
+void ThreadHandler::check(const Settings &settings, const std::shared_ptr<Suppressions>& supprs)
 {
     if (mResults.getFileCount() == 0 || mRunningThreadCount > 0 || settings.jobs == 0) {
         qDebug() << "Can't start checking if there's no files to check or if check is in progress.";
@@ -92,10 +94,7 @@ void ThreadHandler::check(const Settings &settings)
     setThreadCount(settings.jobs);
 
     mRunningThreadCount = mThreads.size();
-
-    if (mResults.getFileCount() < mRunningThreadCount) {
-        mRunningThreadCount = mResults.getFileCount();
-    }
+    mRunningThreadCount = std::min(mResults.getFileCount(), mRunningThreadCount);
 
     QStringList addonsAndTools = mAddonsAndTools;
     for (const std::string& addon: settings.addons) {
@@ -104,11 +103,14 @@ void ThreadHandler::check(const Settings &settings)
             addonsAndTools << s;
     }
 
+    mCtuInfo.clear();
+
     for (int i = 0; i < mRunningThreadCount; i++) {
         mThreads[i]->setAddonsAndTools(addonsAndTools);
         mThreads[i]->setSuppressions(mSuppressions);
         mThreads[i]->setClangIncludePaths(mClangIncludePaths);
-        mThreads[i]->check(settings);
+        mThreads[i]->setSettings(settings, supprs);
+        mThreads[i]->start();
     }
 
     // Date and time when checking starts..
@@ -166,8 +168,9 @@ void ThreadHandler::removeThreads()
 void ThreadHandler::threadDone()
 {
     if (mRunningThreadCount == 1 && mAnalyseWholeProgram) {
-        mThreads[0]->analyseWholeProgram(mLastFiles);
+        mThreads[0]->analyseWholeProgram(mLastFiles, mCtuInfo);
         mAnalyseWholeProgram = false;
+        mCtuInfo.clear();
         return;
     }
 
@@ -189,6 +192,7 @@ void ThreadHandler::stop()
 {
     mCheckStartTime = QDateTime();
     mAnalyseWholeProgram = false;
+    mCtuInfo.clear();
     for (CheckThread* thread : mThreads) {
         thread->stop();
     }

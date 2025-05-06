@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2023 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,12 +22,15 @@
 
 #include "config.h"
 
+#include <cstdint>
 #include <ctime>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <string>
+#include <utility>
 
-enum class SHOWTIME_MODES {
+enum class SHOWTIME_MODES : std::uint8_t {
     SHOWTIME_NONE,
     SHOWTIME_FILE,
     SHOWTIME_FILE_TOTAL,
@@ -48,7 +51,7 @@ struct TimerResultsData {
     long mNumberOfResults{};
 
     double seconds() const {
-        const double ret = (double)((unsigned long)mClocks) / (double)CLOCKS_PER_SEC;
+        const double ret = static_cast<double>(static_cast<unsigned long>(mClocks)) / static_cast<double>(CLOCKS_PER_SEC);
         return ret;
     }
 };
@@ -77,6 +80,11 @@ public:
     Timer& operator=(const Timer&) = delete;
 
     void stop();
+
+    static void run(std::string str, SHOWTIME_MODES showtimeMode, TimerResultsIntf* timerResults, const std::function<void()>& f) {
+        Timer t(std::move(str), showtimeMode, timerResults);
+        f();
+    }
 
 private:
     const std::string mStr;

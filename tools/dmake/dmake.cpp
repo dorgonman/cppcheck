@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
@@ -29,8 +30,6 @@
 #include <set>
 #include <string>
 #include <vector>
-
-#include "config.h"
 
 #include "../cli/filelister.h"
 #include "../lib/filesettings.h"
@@ -148,13 +147,19 @@ static void compilefiles(std::ostream &fout, const std::vector<std::string> &fil
 {
     for (const std::string &file : files) {
         const bool external(startsWith(file,"externals/") || startsWith(file,"../externals/"));
+        const bool tinyxml2(startsWith(file,"externals/tinyxml2/") || startsWith(file,"../externals/tinyxml2/"));
         fout << objfile(file) << ": " << file;
         std::vector<std::string> depfiles;
         getDeps(file, depfiles);
         std::sort(depfiles.begin(), depfiles.end());
         for (const std::string &depfile : depfiles)
             fout << " " << depfile;
-        fout << "\n\t$(CXX) " << args << " $(CPPFLAGS) $(CXXFLAGS)" << (external?" -w":"") << " -c -o $@ " << builddir(file) << "\n\n";
+        std::string additional;
+        if (external)
+            additional += " -w"; // do not show any warnings for external
+        if (tinyxml2)
+            additional += " -D_LARGEFILE_SOURCE"; // required for fseeko() and ftello() (on Cygwin)
+        fout << "\n\t$(CXX) " << args << " $(CPPFLAGS) $(CXXFLAGS)" << additional << " -c -o $@ " << builddir(file) << "\n\n";
     }
 }
 
@@ -242,7 +247,7 @@ static int write_vcxproj(const std::string &proj_name, const std::function<void(
     return EXIT_SUCCESS;
 }
 
-enum ClType { Compile, Include, Precompile };
+enum ClType : std::uint8_t { Compile, Include, Precompile };
 
 static std::string make_vcxproj_cl_entry(const std::string& file, ClType type)
 {
@@ -376,18 +381,18 @@ static void write_ossfuzz_makefile(std::vector<std::string> libfiles_prio, std::
     fout << '\n';
     fout << "do-fuzz: oss-fuzz-client preprare-samples\n";
     fout << "\tmkdir -p corpus\n";
-    fout << "\t./oss-fuzz-client -only_ascii=1 -timeout=3 -detect_leaks=0 corpus samples ../test/cli/fuzz-crash ../test/cli/fuzz-timeout\n";
+    fout << "\t./oss-fuzz-client -only_ascii=1 -timeout=5 -detect_leaks=0 corpus samples ../test/cli/fuzz-crash ../test/cli/fuzz-crash_c ../test/cli/fuzz-timeout\n";
     fout << '\n';
     fout << "dedup-corpus: oss-fuzz-client preprare-samples\n";
     fout << "\tmv corpus corpus_\n";
     fout << "\tmkdir -p corpus\n";
-    fout << "\t./oss-fuzz-client -only_ascii=1 -timeout=3 -detect_leaks=0 corpus corpus_ samples ../test/cli/fuzz-crash ../test/cli/fuzz-timeout -merge=1\n";
+    fout << "\t./oss-fuzz-client -only_ascii=1 -timeout=5 -detect_leaks=0 corpus corpus_ samples ../test/cli/fuzz-crash ../test/cli/fuzz-crash_c ../test/cli/fuzz-timeout -merge=1\n";
     fout << '\n';
     fout << "# jobs:\n";
-    fout << "# ./oss-fuzz-client -only_ascii=1 -timeout=3 -detect_leaks=0 corpus samples ../test/cli/fuzz-crash ../test/cli/fuzz-timeout -workers=12 -jobs=9\n";
+    fout << "# ./oss-fuzz-client -only_ascii=1 -timeout=5 -detect_leaks=0 corpus samples ../test/cli/fuzz-crash ../test/cli/fuzz-crash_c ../test/cli/fuzz-timeout -workers=12 -jobs=9\n";
     fout << '\n';
     fout << "# minimize:\n";
-    fout << "# ./oss-fuzz-client -only_ascii=1 -timeout=3 -detect_leaks=0 -minimize_crash=1 crash-0123456789abcdef\n";
+    fout << "# ./oss-fuzz-client -only_ascii=1 -timeout=5 -detect_leaks=0 -minimize_crash=1 crash-0123456789abcdef\n";
     fout << '\n';
 
     compilefiles(fout, extfiles, "${LIB_FUZZING_ENGINE}");
@@ -454,26 +459,27 @@ int main(int argc, char **argv)
     }
 
     // TODO: add files without source via parsing
-    std::vector<std::string> libfiles_h;
+    std::set<std::string> libfiles_h;
     for (const std::string &libfile : libfiles) {
         std::string fname(libfile.substr(4));
         fname.erase(fname.find(".cpp"));
-        libfiles_h.emplace_back(fname + ".h");
+        libfiles_h.emplace(fname + ".h");
     }
-    libfiles_h.emplace_back("analyzer.h");
-    libfiles_h.emplace_back("calculate.h");
-    libfiles_h.emplace_back("config.h");
-    libfiles_h.emplace_back("filesettings.h");
-    libfiles_h.emplace_back("findtoken.h");
-    libfiles_h.emplace_back("json.h");
-    libfiles_h.emplace_back("precompiled.h");
-    libfiles_h.emplace_back("smallvector.h");
-    libfiles_h.emplace_back("standards.h");
-    libfiles_h.emplace_back("tokenrange.h");
-    libfiles_h.emplace_back("valueptr.h");
-    libfiles_h.emplace_back("version.h");
-    libfiles_h.emplace_back("xml.h");
-    std::sort(libfiles_h.begin(), libfiles_h.end());
+    libfiles_h.emplace("analyzer.h");
+    libfiles_h.emplace("calculate.h");
+    libfiles_h.emplace("config.h");
+    libfiles_h.emplace("filesettings.h");
+    libfiles_h.emplace("findtoken.h");
+    libfiles_h.emplace("json.h");
+    libfiles_h.emplace("matchcompiler.h");
+    libfiles_h.emplace("precompiled.h");
+    libfiles_h.emplace("smallvector.h");
+    libfiles_h.emplace("sourcelocation.h");
+    libfiles_h.emplace("tokenrange.h");
+    libfiles_h.emplace("valueptr.h");
+    libfiles_h.emplace("version.h");
+    libfiles_h.emplace("vf_analyze.h");
+    libfiles_h.emplace("xml.h");
 
     std::vector<std::string> clifiles_h;
     for (const std::string &clifile : clifiles) {
@@ -484,13 +490,12 @@ int main(int argc, char **argv)
         clifiles_h.emplace_back(fname + ".h");
     }
 
-    std::vector<std::string> testfiles_h;
-    testfiles_h.emplace_back("fixture.h");
-    testfiles_h.emplace_back("helpers.h");
-    testfiles_h.emplace_back("options.h");
-    testfiles_h.emplace_back("precompiled.h");
-    testfiles_h.emplace_back("redirect.h");
-    std::sort(testfiles_h.begin(), testfiles_h.end());
+    std::set<std::string> testfiles_h;
+    testfiles_h.emplace("fixture.h");
+    testfiles_h.emplace("helpers.h");
+    testfiles_h.emplace("options.h");
+    testfiles_h.emplace("precompiled.h");
+    testfiles_h.emplace("redirect.h");
 
     // TODO: write filter files
     // Visual Studio projects
@@ -545,30 +550,6 @@ int main(int argc, char **argv)
         }
     });
 
-    // QMAKE - lib/lib.pri
-    {
-        std::ofstream fout1("lib/lib.pri");
-        if (fout1.is_open()) {
-            fout1 << "# no manual edits - this file is autogenerated by dmake\n\n";
-            fout1 << "include($$PWD/pcrerules.pri)\n";
-            fout1 << "include($$PWD/../externals/externals.pri)\n";
-            fout1 << "INCLUDEPATH += $$PWD\n";
-            fout1 << "HEADERS += ";
-            for (const std::string &libfile_h : libfiles_h) {
-                fout1 << "$${PWD}/" << libfile_h;
-                if (libfile_h != libfiles_h.back())
-                    fout1 << " \\\n" << std::string(11, ' ');
-            }
-            fout1 << "\n\nSOURCES += ";
-            for (const std::string &libfile : libfiles_prio) {
-                fout1 << "$${PWD}/" << libfile.substr(4);
-                if (libfile != libfiles.back())
-                    fout1 << " \\\n" << std::string(11, ' ');
-            }
-            fout1 << "\n";
-        }
-    }
-
     static constexpr char makefile[] = "Makefile";
     std::ofstream fout(makefile, std::ios_base::trunc);
     if (!fout.is_open()) {
@@ -587,7 +568,7 @@ int main(int argc, char **argv)
     fout << "# To compile with rules, use 'make HAVE_RULES=yes'\n";
     makeConditionalVariable(fout, "HAVE_RULES", "");
 
-    makeMatchcompiler(fout, emptyString, emptyString);
+    makeMatchcompiler(fout, "", "");
 
     // avoid undefined variable
     fout << "ifndef CPPFLAGS\n"
@@ -596,7 +577,7 @@ int main(int argc, char **argv)
 
     // explicit files dir..
     fout << "ifdef FILESDIR\n"
-         << "    CPPFLAGS+=-DFILESDIR=\\\"$(FILESDIR)\\\"\n"
+         << "    override CPPFLAGS+=-DFILESDIR=\\\"$(FILESDIR)\\\"\n"
          << "endif\n\n";
 
     // enable backtrac
@@ -675,16 +656,11 @@ int main(int argc, char **argv)
          << "endif # WINNT\n"
          << "\n";
 
-    // tinymxl2 requires __STRICT_ANSI__ to be undefined to compile under CYGWIN.
     fout << "ifdef CYGWIN\n"
          << "    ifeq ($(VERBOSE),1)\n"
          << "        $(info CYGWIN found)\n"
          << "    endif\n"
          << "\n"
-         << "    # Set the flag to address compile time warnings\n"
-         << "    # with tinyxml2 and Cygwin.\n"
-         << "    CPPFLAGS+=-U__STRICT_ANSI__\n"
-         << "    \n"
          << "    # Increase stack size for Cygwin builds to avoid segmentation fault in limited recursive tests.\n"
          << "    CXXFLAGS+=-Wl,--stack,8388608\n"
          << "endif # CYGWIN\n"
@@ -698,7 +674,7 @@ int main(int argc, char **argv)
 
     // Makefile settings..
     if (release) {
-        makeConditionalVariable(fout, "CXXFLAGS", "-std=c++0x -O2 -DNDEBUG -Wall -Wno-sign-compare -Wno-multichar");
+        makeConditionalVariable(fout, "CXXFLAGS", "-O2 -DNDEBUG -Wall -Wno-sign-compare -Wno-multichar");
     } else {
         makeConditionalVariable(fout, "CXXFLAGS",
                                 "-pedantic "
@@ -712,9 +688,6 @@ int main(int argc, char **argv)
                                 "-Wpacked "
                                 "-Wredundant-decls "
                                 "-Wundef "
-                                "-Wno-shadow "
-                                "-Wno-missing-field-initializers "
-                                "-Wno-missing-braces "
                                 "-Wno-sign-compare "
                                 "-Wno-multichar "
                                 "-Woverloaded-virtual "
@@ -723,14 +696,9 @@ int main(int argc, char **argv)
     }
 
     fout << "ifeq (g++, $(findstring g++,$(CXX)))\n"
-         << "    override CXXFLAGS += -std=gnu++0x -pipe\n"
-         << "else ifeq (clang++, $(findstring clang++,$(CXX)))\n"
-         << "    override CXXFLAGS += -std=c++0x\n"
-         << "else ifeq ($(CXX), c++)\n"
-         << "    ifeq ($(shell uname -s), Darwin)\n"
-         << "        override CXXFLAGS += -std=c++0x\n"
-         << "    endif\n"
+         << "    override CXXFLAGS += -pipe\n"
          << "endif\n"
+         << "override CXXFLAGS += -std=c++11"
          << "\n";
 
     fout << "ifeq ($(HAVE_RULES),yes)\n"
@@ -750,7 +718,7 @@ int main(int argc, char **argv)
 
     makeConditionalVariable(fout, "PREFIX", "/usr");
     makeConditionalVariable(fout, "INCLUDE_FOR_LIB", "-Ilib -isystem externals -isystem externals/picojson -isystem externals/simplecpp -isystem externals/tinyxml2");
-    makeConditionalVariable(fout, "INCLUDE_FOR_CLI", "-Ilib -isystem externals/simplecpp -isystem externals/tinyxml2");
+    makeConditionalVariable(fout, "INCLUDE_FOR_CLI", "-Ilib -isystem externals/picojson -isystem externals/simplecpp -isystem externals/tinyxml2");
     makeConditionalVariable(fout, "INCLUDE_FOR_TEST", "-Ilib -Icli -isystem externals/simplecpp -isystem externals/tinyxml2");
 
     fout << "BIN=$(DESTDIR)$(PREFIX)/bin\n\n";
@@ -770,8 +738,15 @@ int main(int argc, char **argv)
     fout << "cppcheck: $(EXTOBJ) $(LIBOBJ) $(CLIOBJ)\n";
     fout << "\t$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $^ $(LIBS) $(LDFLAGS) $(RDYNAMIC)\n\n";
     fout << "all:\tcppcheck testrunner\n\n";
-    // TODO: generate from clifiles
-    fout << "testrunner: $(EXTOBJ) $(TESTOBJ) $(LIBOBJ) cli/executor.o cli/processexecutor.o cli/singleexecutor.o cli/threadexecutor.o cli/cmdlineparser.o cli/cppcheckexecutor.o cli/cppcheckexecutorseh.o cli/signalhandler.o cli/stacktrace.o cli/filelister.o\n";
+    std::string testrunner_clifiles_o;
+    for (const std::string &clifile: clifiles) {
+        if (clifile == "cli/main.cpp")
+            continue;
+        testrunner_clifiles_o += ' ';
+        const std::string o = clifile.substr(0, clifile.length()-3) + 'o';
+        testrunner_clifiles_o += o;
+    }
+    fout << "testrunner: $(EXTOBJ) $(TESTOBJ) $(LIBOBJ)" << testrunner_clifiles_o << "\n";
     fout << "\t$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $^ $(LIBS) $(LDFLAGS) $(RDYNAMIC)\n\n";
     fout << "test:\tall\n";
     fout << "\t./testrunner\n\n";
@@ -784,7 +759,7 @@ int main(int argc, char **argv)
     fout << "run-dmake: dmake\n";
     fout << "\t./dmake" << (release ? " --release" : "") << "\n\n"; // Make CI in release builds happy
     fout << "clean:\n";
-    fout << "\trm -f build/*.cpp build/*.o lib/*.o cli/*.o test/*.o tools/*.o externals/*/*.o testrunner dmake cppcheck cppcheck.exe cppcheck.1\n\n";
+    fout << "\trm -f build/*.cpp build/*.o lib/*.o cli/*.o test/*.o tools/dmake/*.o externals/*/*.o testrunner dmake cppcheck cppcheck.exe cppcheck.1\n\n";
     fout << "man:\tman/cppcheck.1\n\n";
     fout << "man/cppcheck.1:\t$(MAN_SOURCE)\n\n";
     fout << "\t$(XP) $(DB2MAN) $(MAN_SOURCE)\n\n";
@@ -797,6 +772,7 @@ int main(int argc, char **argv)
     fout << "ifdef FILESDIR\n";
     fout << "\tinstall -d ${DESTDIR}${FILESDIR}\n";
     fout << "\tinstall -d ${DESTDIR}${FILESDIR}/addons\n";
+    fout << "\tinstall -m 644 addons/*.json ${DESTDIR}${FILESDIR}/addons\n";
     fout << "\tinstall -m 644 addons/*.py ${DESTDIR}${FILESDIR}/addons\n";
     fout << "\tinstall -d ${DESTDIR}${FILESDIR}/cfg\n";
     fout << "\tinstall -m 644 cfg/*.cfg ${DESTDIR}${FILESDIR}/cfg\n";
@@ -818,15 +794,6 @@ int main(int argc, char **argv)
     fout << "\t  rm -rf ${DESTDIR}${FILESDIR}; \\\n";
     fout << "\tfi\n";
     fout << "endif\n";
-    fout << "ifdef CFGDIR \n";
-    fout << "\t@if test -d ${DESTDIR}${CFGDIR}; then \\\n";
-    fout << "\t  files=\"`cd cfg 2>/dev/null && ls`\"; \\\n";
-    fout << "\t  if test -n \"$$files\"; then \\\n";
-    fout << "\t    echo '(' cd ${DESTDIR}${CFGDIR} '&&' rm -f $$files ')'; \\\n";
-    fout << "\t    ( cd ${DESTDIR}${CFGDIR} && rm -f $$files ); \\\n";
-    fout << "\t  fi; \\\n";
-    fout << "\tfi\n";
-    fout << "endif\n\n";
     fout << "# Validation of library files:\n";
     fout << "ConfigFiles := $(wildcard cfg/*.cfg)\n";
     fout << "ConfigFilesCHECKED := $(patsubst %.cfg,%.checked,$(ConfigFiles))\n";
@@ -870,7 +837,7 @@ int main(int argc, char **argv)
     compilefiles(fout, libfiles_prio, "${INCLUDE_FOR_LIB}");
     compilefiles(fout, clifiles, "${INCLUDE_FOR_CLI}");
     compilefiles(fout, testfiles, "${INCLUDE_FOR_TEST}");
-    compilefiles(fout, extfiles, emptyString);
+    compilefiles(fout, extfiles, "");
     compilefiles(fout, toolsfiles, "${INCLUDE_FOR_LIB}");
 
     write_ossfuzz_makefile(libfiles_prio, extfiles);

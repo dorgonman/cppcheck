@@ -1,4 +1,4 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
  * Copyright (C) 2007-2024 Cppcheck team.
  *
@@ -172,7 +172,7 @@ private:
      */
     void setSuppressions(const QList<SuppressionList::Suppression> &suppressions);
 
-protected slots:
+private slots:
 
     /** ok button pressed, save changes and accept */
     void ok();
@@ -319,15 +319,15 @@ protected:
 private:
     static QStringList getProjectConfigs(const QString &fileName);
 
-    Ui::ProjectFile *mUI;
+    Ui::ProjectFile * const mUI;
 
     /**
      * @brief Projectfile path.
      */
-    ProjectFile *mProjectFile;
+    ProjectFile * const mProjectFile;
 
     /** Is this Cppcheck Premium? */
-    bool mPremium;
+    const bool mPremium;
 
     QString getExistingDirectory(const QString &caption, bool trailingSlash);
 

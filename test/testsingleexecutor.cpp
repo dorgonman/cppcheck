@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
 #include "redirect.h"
 #include "settings.h"
 #include "singleexecutor.h"
+#include "standards.h"
 #include "suppressions.h"
 #include "timer.h"
 
@@ -77,19 +78,18 @@ private:
         if (opt.filesList.empty()) {
             for (int i = 1; i <= files; ++i) {
                 std::string f_s = fprefix() + "_" + zpad3(i) + ".cpp";
-                filelist.emplace_back(f_s, data.size());
+                filelist.emplace_back(f_s, Standards::Language::CPP, data.size());
                 if (useFS) {
-                    fileSettings.emplace_back(std::move(f_s), data.size());
+                    fileSettings.emplace_back(std::move(f_s), Standards::Language::CPP, data.size());
                 }
             }
         }
         else {
             for (const auto& f : opt.filesList)
             {
-                filelist.emplace_back(f, data.size());
+                filelist.emplace_back(f, Standards::Language::CPP, data.size());
                 if (useFS) {
-
-                    fileSettings.emplace_back(f, data.size());
+                    fileSettings.emplace_back(f, Standards::Language::CPP, data.size());
                 }
             }
         }
@@ -100,40 +100,43 @@ private:
         if (opt.plistOutput)
             s.plistOutput = opt.plistOutput;
         s.clangTidy = opt.clangTidy;
+        s.templateFormat = "{callstack}: ({severity}) {inconclusive:inconclusive: }{message}"; // TODO: remove when we only longer rely on toString() in unique message handling?
+
+        Suppressions supprs;
 
         bool executeCommandCalled = false;
         std::string exe;
         std::vector<std::string> args;
         // NOLINTNEXTLINE(performance-unnecessary-value-param)
-        CppCheck cppcheck(*this, true, [&executeCommandCalled, &exe, &args](std::string e,std::vector<std::string> a,std::string,std::string&){
+        CppCheck cppcheck(s, supprs, *this, true, [&executeCommandCalled, &exe, &args](std::string e,std::vector<std::string> a,std::string,std::string&){
             executeCommandCalled = true;
             exe = std::move(e);
             args = std::move(a);
             return EXIT_SUCCESS;
         });
-        cppcheck.settings() = s;
 
         std::vector<std::unique_ptr<ScopedFile>> scopedfiles;
         scopedfiles.reserve(filelist.size());
-        for (std::list<FileWithDetails>::const_iterator i = filelist.cbegin(); i != filelist.cend(); ++i)
+        for (auto i = filelist.cbegin(); i != filelist.cend(); ++i)
             scopedfiles.emplace_back(new ScopedFile(i->path(), data));
 
         // clear files list so only fileSettings are used
         if (useFS)
             filelist.clear();
 
-        SingleExecutor executor(cppcheck, filelist, fileSettings, s, s.supprs.nomsg, *this);
+        SingleExecutor executor(cppcheck, filelist, fileSettings, s, supprs, *this);
         ASSERT_EQUALS(result, executor.check());
         ASSERT_EQUALS(opt.executeCommandCalled, executeCommandCalled);
         ASSERT_EQUALS(opt.exe, exe);
         ASSERT_EQUALS(opt.args.size(), args.size());
-        for (int i = 0; i < args.size(); ++i)
+        for (std::size_t i = 0; i < args.size(); ++i)
         {
             ASSERT_EQUALS(opt.args[i], args[i]);
         }
     }
 
     void run() override {
+        mNewTemplate = true;
         TEST_CASE(many_files);
         TEST_CASE(many_files_showtime);
         TEST_CASE(many_files_plist);
@@ -172,7 +175,7 @@ private:
         {
             std::string expected;
             for (int i = 1; i <= num_files; ++i) {
-                expected += "[" + fprefix() + "_" + zpad3(i) + ".cpp:3]: (error) Null pointer dereference: (int*)0\n";
+                expected += "[" + fprefix() + "_" + zpad3(i) + ".cpp:3:13]: (error) Null pointer dereference: (int*)0 [nullPointer]\n";
             }
             ASSERT_EQUALS(expected, errout_str());
         }
@@ -235,7 +238,7 @@ private:
               "  {int i = *((int*)0);}\n"
               "  return 0;\n"
               "}");
-        ASSERT_EQUALS("[" + fprefix() + "_" + zpad3(1) + ".cpp:3]: (error) Null pointer dereference: (int*)0\n", errout_str());
+        ASSERT_EQUALS("[" + fprefix() + "_" + zpad3(1) + ".cpp:3:14]: (error) Null pointer dereference: (int*)0 [nullPointer]\n", errout_str());
     }
 
     void one_error_several_files() {
@@ -249,7 +252,7 @@ private:
         {
             std::string expected;
             for (int i = 1; i <= num_files; ++i) {
-                expected += "[" + fprefix() + "_" + zpad3(i) + ".cpp:3]: (error) Null pointer dereference: (int*)0\n";
+                expected += "[" + fprefix() + "_" + zpad3(i) + ".cpp:3:14]: (error) Null pointer dereference: (int*)0 [nullPointer]\n";
             }
             ASSERT_EQUALS(expected, errout_str());
         }
@@ -343,9 +346,9 @@ private:
 
     void suppress_error_library() {
         SUPPRESS;
-        const Settings settingsOld = settings;
+        const Settings settingsOld = settings; // TODO: get rid of this
         const char xmldata[] = R"(<def format="2"><markup ext=".cpp" reporterrors="false"/></def>)";
-        settings = settingsBuilder().libraryxml(xmldata, sizeof(xmldata)).build();
+        settings = settingsBuilder().libraryxml(xmldata).build();
         check(1, 0,
               "int main()\n"
               "{\n"
@@ -367,8 +370,8 @@ private:
               "#include \"" + inc_h.name() + "\"");
         // these are not actually made unique by the implementation. That needs to be done by the given ErrorLogger
         ASSERT_EQUALS(
-            "[" + inc_h.name() + ":3]: (error) Null pointer dereference: (int*)0\n"
-            "[" + inc_h.name() + ":3]: (error) Null pointer dereference: (int*)0\n",
+            "[" + inc_h.name() + ":3:11]: (error) Null pointer dereference: (int*)0 [nullPointer]\n"
+            "[" + inc_h.name() + ":3:11]: (error) Null pointer dereference: (int*)0 [nullPointer]\n",
             errout_str());
     }
 

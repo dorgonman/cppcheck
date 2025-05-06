@@ -77,6 +77,7 @@ void ProjectFile::clear()
     mAnalyzeAllVsConfigs = false;
     mCheckHeaders = true;
     mCheckUnusedTemplates = true;
+    mInlineSuppression = true;
     mMaxCtuDepth = settings.maxCtuDepth;
     mMaxTemplateRecursion = settings.maxTemplateRecursion;
     mCheckUnknownFunctionReturn.clear();
@@ -89,6 +90,7 @@ void ProjectFile::clear()
     mBughunting = false;
     mCertIntPrecision = 0;
     mCodingStandards.clear();
+    mPremiumLicenseFile.clear();
 }
 
 bool ProjectFile::read(const QString &filename)
@@ -143,8 +145,17 @@ bool ProjectFile::read(const QString &filename)
             if (xmlReader.name() == QString(CppcheckXml::CheckUnusedTemplatesElementName))
                 mCheckUnusedTemplates = readBool(xmlReader);
 
+            if (xmlReader.name() == QString(CppcheckXml::InlineSuppression))
+                mInlineSuppression = readBool(xmlReader);
+
             if (xmlReader.name() == QString(CppcheckXml::CheckLevelExhaustiveElementName))
                 mCheckLevel = CheckLevel::exhaustive;
+
+            if (xmlReader.name() == QString(CppcheckXml::CheckLevelNormalElementName))
+                mCheckLevel = CheckLevel::normal;
+
+            if (xmlReader.name() == QString(CppcheckXml::CheckLevelReducedElementName))
+                mCheckLevel = CheckLevel::reduced;
 
             // Find include directory from inside project element
             if (xmlReader.name() == QString(CppcheckXml::IncludeDirElementName))
@@ -221,6 +232,8 @@ bool ProjectFile::read(const QString &filename)
                 readStringList(mCodingStandards, xmlReader, CppcheckXml::CodingStandardElementName);
             if (xmlReader.name() == QString(CppcheckXml::CertIntPrecisionElementName))
                 mCertIntPrecision = readInt(xmlReader, 0);
+            if (xmlReader.name() == QString(CppcheckXml::LicenseFileElementName))
+                mPremiumLicenseFile = readString(xmlReader);
             if (xmlReader.name() == QString(CppcheckXml::ProjectNameElementName))
                 mProjectName = readString(xmlReader);
 
@@ -797,11 +810,6 @@ void ProjectFile::setCheckLevel(ProjectFile::CheckLevel checkLevel)
     mCheckLevel = checkLevel;
 }
 
-bool ProjectFile::isCheckLevelExhaustive() const
-{
-    return mCheckLevel == CheckLevel::exhaustive;
-}
-
 void ProjectFile::setWarningTags(std::size_t hash, const QString& tags)
 {
     if (tags.isEmpty())
@@ -871,6 +879,10 @@ bool ProjectFile::write(const QString &filename)
 
     xmlWriter.writeStartElement(CppcheckXml::CheckUnusedTemplatesElementName);
     xmlWriter.writeCharacters(bool_to_string(mCheckUnusedTemplates));
+    xmlWriter.writeEndElement();
+
+    xmlWriter.writeStartElement(CppcheckXml::InlineSuppression);
+    xmlWriter.writeCharacters(bool_to_string(mInlineSuppression));
     xmlWriter.writeEndElement();
 
     xmlWriter.writeStartElement(CppcheckXml::MaxCtuDepthElementName);
@@ -1000,9 +1012,19 @@ bool ProjectFile::write(const QString &filename)
         }
     }
 
-    if (mCheckLevel == CheckLevel::exhaustive) {
+    switch (mCheckLevel) {
+    case CheckLevel::reduced:
+        xmlWriter.writeStartElement(CppcheckXml::CheckLevelReducedElementName);
+        xmlWriter.writeEndElement();
+        break;
+    case CheckLevel::normal:
+        xmlWriter.writeStartElement(CppcheckXml::CheckLevelNormalElementName);
+        xmlWriter.writeEndElement();
+        break;
+    case CheckLevel::exhaustive:
         xmlWriter.writeStartElement(CppcheckXml::CheckLevelExhaustiveElementName);
         xmlWriter.writeEndElement();
+        break;
     }
 
     // Cppcheck Premium
@@ -1025,6 +1047,12 @@ bool ProjectFile::write(const QString &filename)
     if (!mProjectName.isEmpty()) {
         xmlWriter.writeStartElement(CppcheckXml::ProjectNameElementName);
         xmlWriter.writeCharacters(mProjectName);
+        xmlWriter.writeEndElement();
+    }
+
+    if (!mPremiumLicenseFile.isEmpty()) {
+        xmlWriter.writeStartElement(CppcheckXml::LicenseFileElementName);
+        xmlWriter.writeCharacters(mPremiumLicenseFile);
         xmlWriter.writeEndElement();
     }
 

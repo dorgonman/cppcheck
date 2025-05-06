@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,10 +22,8 @@
 #include "helpers.h"
 #include "platform.h"
 #include "settings.h"
-#include "tokenize.h"
-#include "tokenlist.h"
 
-#include <sstream>
+#include <cstddef>
 #include <string>
 
 class TestUnusedFunctions : public TestFixture {
@@ -36,6 +34,7 @@ private:
     const Settings settings = settingsBuilder().severity(Severity::style).build();
 
     void run() override {
+        mNewTemplate = true;
         TEST_CASE(incondition);
         TEST_CASE(return1);
         TEST_CASE(return2);
@@ -66,6 +65,7 @@ private:
         TEST_CASE(member_function_ternary);
         TEST_CASE(boost);
         TEST_CASE(enumValues);
+        TEST_CASE(recursive);
 
         TEST_CASE(multipleFiles);   // same function name in multiple files
 
@@ -80,14 +80,30 @@ private:
         TEST_CASE(entrypointsUnix);
 
         TEST_CASE(includes);
+        TEST_CASE(virtualFunc);
+        TEST_CASE(parensInit);
+        TEST_CASE(typeInCast);
+        TEST_CASE(attributeCleanup);
+        TEST_CASE(attributeUnused);
+        TEST_CASE(attributeMaybeUnused);
+        TEST_CASE(staticFunction);
     }
 
+    struct CheckOptions
+    {
+        CheckOptions() = default;
+        Platform::Type platform = Platform::Type::Native;
+        const Settings* s = nullptr;
+        bool cpp = true;
+    };
+
 #define check(...) check_(__FILE__, __LINE__, __VA_ARGS__)
-    void check_(const char* file, int line, const char code[], Platform::Type platform = Platform::Type::Native, const Settings *s = nullptr) {
-        const Settings settings1 = settingsBuilder(s ? *s : settings).platform(platform).build();
+    template<size_t size>
+    void check_(const char* file, int line, const char (&code)[size], const CheckOptions& options = make_default_obj()) {
+        const Settings settings1 = settingsBuilder(options.s ? *options.s : settings).platform(options.platform).build();
 
         // Tokenize..
-        SimpleTokenizer tokenizer(settings1, *this);
+        SimpleTokenizer tokenizer(settings1, *this, options.cpp);
         ASSERT_LOC(tokenizer.tokenize(code), file, line);
 
         // Check for unused functions..
@@ -96,13 +112,25 @@ private:
         (checkUnusedFunctions.check)(settings1, *this); // TODO: check result
     }
 
+    // TODO: get rid of this
+    void check_(const char* file, int line, const std::string& code ) {
+        // Tokenize..
+        SimpleTokenizer tokenizer(settings, *this);
+        ASSERT_LOC(tokenizer.tokenize(code), file, line);
+
+        // Check for unused functions..
+        CheckUnusedFunctions checkUnusedFunctions;
+        checkUnusedFunctions.parseTokens(tokenizer, settings);
+        (checkUnusedFunctions.check)(settings, *this); // TODO: check result
+    }
+
     void incondition() {
         check("int f1()\n"
               "{\n"
               "    if (f1())\n"
               "    { }\n"
               "}");
-        ASSERT_EQUALS("", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'f1' is never used. [unusedFunction]\n", errout_str());
     }
 
     void return1() {
@@ -110,15 +138,15 @@ private:
               "{\n"
               "    return f1();\n"
               "}");
-        ASSERT_EQUALS("", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'f1' is never used. [unusedFunction]\n", errout_str());
     }
 
     void return2() {
         check("char * foo()\n"
               "{\n"
-              "    return *foo();\n"
+              "    return foo();\n"
               "}");
-        ASSERT_EQUALS("", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'foo' is never used. [unusedFunction]\n", errout_str());
     }
 
     void return3() {
@@ -144,7 +172,7 @@ private:
               "{\n"
               "    void (*f)() = cond ? f1 : NULL;\n"
               "}");
-        ASSERT_EQUALS("", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'f1' is never used. [unusedFunction]\n", errout_str());
     }
 
     void callback2() { // #8677
@@ -157,7 +185,7 @@ private:
               "void C::callback() {}\n" // <- not unused
               "\n"
               "void C::start() { ev.set<C, &C::callback>(this); }");
-        ASSERT_EQUALS("[test.cpp:9]: (style) The function 'start' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:9:0]: (style) The function 'start' is never used. [unusedFunction]\n", errout_str());
     }
 
     void else1() {
@@ -166,7 +194,7 @@ private:
               "    if (cond) ;\n"
               "    else f1();\n"
               "}");
-        ASSERT_EQUALS("", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'f1' is never used. [unusedFunction]\n", errout_str());
     }
 
     void functionpointer() {
@@ -219,6 +247,17 @@ private:
               "    return 0\n"
               "}");
         ASSERT_EQUALS("", errout_str());
+
+        check("template <class T> T f()\n" // #13117
+              "{\n"
+              "    return T(1);\n"
+              "}\n"
+              "int main(void)\n"
+              "{\n"
+              "    auto *ptr = &f<int>;\n"
+              "    return ptr();\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
     }
 
     void template1() {
@@ -241,7 +280,7 @@ private:
               "}\n"
               "\n"
               "void h() { g<int>(); h(); }");
-        ASSERT_EQUALS("", errout_str());
+        ASSERT_EQUALS("[test.cpp:8:0]: (style) The function 'h' is never used. [unusedFunction]\n", errout_str());
     }
 
     void template3() { // #4701
@@ -252,7 +291,7 @@ private:
               "    template<typename T> void foo( T t ) const;\n"
               "};\n"
               "template<typename T> void X::foo( T t ) const { }");
-        ASSERT_EQUALS("[test.cpp:3]: (style) The function 'bar' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:3:0]: (style) The function 'bar' is never used. [unusedFunction]\n", errout_str());
     }
 
     void template4() { // #9805
@@ -272,7 +311,7 @@ private:
               "        test();\n"
               "    }\n"
               "};");
-        ASSERT_EQUALS("", errout_str());
+        ASSERT_EQUALS("[test.cpp:11:0]: (style) The function 'test' is never used. [unusedFunction]\n", errout_str());
     }
 
     void template5() { // #9220
@@ -298,7 +337,7 @@ private:
         check("void f() {\n"
               "    std::array<std::array<double,3>,3> array;\n"
               "}\n");
-        ASSERT_EQUALS("[test.cpp:1]: (style) The function 'f' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'f' is never used. [unusedFunction]\n", errout_str());
     }
 
     void template8() { // #11485
@@ -306,9 +345,9 @@ private:
               "    template<typename T>\n"
               "    void tf(const T&) { }\n"
               "};\n");
-        ASSERT_EQUALS("[test.cpp:3]: (style) The function 'tf' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:3:0]: (style) The function 'tf' is never used. [unusedFunction]\n", errout_str());
 
-        check("struct S {\n"
+        check("struct C {\n"
               "    template<typename T>\n"
               "    void tf(const T&) { }\n"
               "};\n"
@@ -318,7 +357,7 @@ private:
               "}\n");
         ASSERT_EQUALS("", errout_str());
 
-        check("struct S {\n"
+        check("struct C {\n"
               "    template<typename T>\n"
               "    void tf(const T&) { }\n"
               "};\n"
@@ -368,19 +407,19 @@ private:
     void unusedError() {
         check("void foo() {}\n"
               "int main()");
-        ASSERT_EQUALS("[test.cpp:1]: (style) The function 'foo' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'foo' is never used. [unusedFunction]\n", errout_str());
 
         check("void foo() const {}\n"
               "int main()");
-        ASSERT_EQUALS("[test.cpp:1]: (style) The function 'foo' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'foo' is never used. [unusedFunction]\n", errout_str());
 
         check("void foo() const throw() {}\n"
               "int main()");
-        ASSERT_EQUALS("[test.cpp:1]: (style) The function 'foo' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'foo' is never used. [unusedFunction]\n", errout_str());
 
         check("void foo() throw() {}\n"
               "int main()");
-        ASSERT_EQUALS("[test.cpp:1]: (style) The function 'foo' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'foo' is never used. [unusedFunction]\n", errout_str());
     }
 
     void unusedMain() {
@@ -418,7 +457,7 @@ private:
 
     void returnRef() {
         check("int& foo() {return x;}");
-        ASSERT_EQUALS("[test.cpp:1]: (style) The function 'foo' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'foo' is never used. [unusedFunction]\n", errout_str());
     }
 
     void attribute() { // #3471 - FP __attribute__((constructor))
@@ -471,6 +510,10 @@ private:
         // #10661
         check("extern \"C\" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t dataSize) { return 0; }\n");
         ASSERT_EQUALS("", errout_str());
+
+        check("[[maybe_unused]] void f() {}\n" // #13268
+              "__attribute__((unused)) void g() {}\n");
+        ASSERT_EQUALS("", errout_str());
     }
 
     void initializer_list() {
@@ -509,10 +552,11 @@ private:
     }
 
     void boost() {
-        check("static void _xy(const char *b, const char *e)\n"
-              "{}\n"
-              "parse(line, blanks_p >> ident[&_xy] >> blanks_p >> eol_p).full");
-        ASSERT_EQUALS("", errout_str());
+        check("static void _xy(const char *b, const char *e) {}\n"
+              "void f() {\n"
+              "    parse(line, blanks_p >> ident[&_xy] >> blanks_p >> eol_p).full;\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:2:0]: (style) The function 'f' is never used. [unusedFunction]\n", errout_str());
     }
 
     void enumValues() { // #11486
@@ -522,8 +566,25 @@ private:
               "    void Break() {}\n"
               "    void Break1() {}\n"
               "};\n");
-        ASSERT_EQUALS("[test.cpp:4]: (style) The function 'Break' is never used.\n"
-                      "[test.cpp:5]: (style) The function 'Break1' is never used.\n",
+        ASSERT_EQUALS("[test.cpp:4:0]: (style) The function 'Break' is never used. [unusedFunction]\n"
+                      "[test.cpp:5:0]: (style) The function 'Break1' is never used. [unusedFunction]\n",
+                      errout_str());
+
+        check("struct S {\n" // #12899
+              "    void f() {}\n"
+              "};\n"
+              "enum E { f };\n"
+              "int main() {\n"
+              "    E e{ f };\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:2:0]: (style) The function 'f' is never used. [unusedFunction]\n", errout_str());
+    }
+
+    void recursive() {
+        check("void f() {\n" // #8159
+              "    f();\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'f' is never used. [unusedFunction]\n",
                       errout_str());
     }
 
@@ -535,34 +596,32 @@ private:
         for (int i = 1; i <= 2; ++i) {
             const std::string fname = "test" + std::to_string(i) + ".cpp";
 
-            Tokenizer tokenizer(settings, *this);
-            std::istringstream istr(code);
-            ASSERT(tokenizer.list.createTokens(istr, fname));
-            ASSERT(tokenizer.simplifyTokens1(""));
+            SimpleTokenizer tokenizer{settings, *this, fname};
+            ASSERT(tokenizer.tokenize(code));
 
             c.parseTokens(tokenizer, settings);
         }
 
         // Check for unused functions..
-        (c.check)(settings, *this);
+        (c.check)(settings, *this); // TODO: check result
 
-        ASSERT_EQUALS("[test1.cpp:1]: (style) The function 'f' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test1.cpp:1:0]: (style) The function 'f' is never used. [unusedFunction]\n", errout_str());
     }
 
     void lineNumber() {
         check("void foo();\n"
               "void bar() {}\n"
               "int main() {}");
-        ASSERT_EQUALS("[test.cpp:2]: (style) The function 'bar' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:2:0]: (style) The function 'bar' is never used. [unusedFunction]\n", errout_str());
     }
 
     void ignore_declaration() {
         check("void f();\n"
               "void f() {}");
-        ASSERT_EQUALS("[test.cpp:2]: (style) The function 'f' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:2:0]: (style) The function 'f' is never used. [unusedFunction]\n", errout_str());
 
         check("void f(void) {}\n"
-              "void (*list[])(void) = {f}");
+              "void (*list[])(void) = {f};");
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -630,46 +689,46 @@ private:
 
     void entrypointsWin() {
         check("int WinMain() { }");
-        ASSERT_EQUALS("[test.cpp:1]: (style) The function 'WinMain' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'WinMain' is never used. [unusedFunction]\n", errout_str());
 
         check("int _tmain() { }");
-        ASSERT_EQUALS("[test.cpp:1]: (style) The function '_tmain' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function '_tmain' is never used. [unusedFunction]\n", errout_str());
 
         const Settings s = settingsBuilder(settings).library("windows.cfg").build();
 
-        check("int WinMain() { }", Platform::Type::Native, &s);
+        check("int WinMain() { }", dinit(CheckOptions, $.s = &s));
         ASSERT_EQUALS("", errout_str());
 
-        check("int _tmain() { }", Platform::Type::Native, &s);
+        check("int _tmain() { }", dinit(CheckOptions, $.s = &s));
         ASSERT_EQUALS("", errout_str());
     }
 
     void entrypointsWinU() {
         check("int wWinMain() { }");
-        ASSERT_EQUALS("[test.cpp:1]: (style) The function 'wWinMain' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function 'wWinMain' is never used. [unusedFunction]\n", errout_str());
 
         check("int _tmain() { }");
-        ASSERT_EQUALS("[test.cpp:1]: (style) The function '_tmain' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function '_tmain' is never used. [unusedFunction]\n", errout_str());
 
         const Settings s = settingsBuilder(settings).library("windows.cfg").build();
 
-        check("int wWinMain() { }", Platform::Type::Native, &s);
+        check("int wWinMain() { }", dinit(CheckOptions, $.s = &s));
         ASSERT_EQUALS("", errout_str());
 
-        check("int _tmain() { }", Platform::Type::Native, &s);
+        check("int _tmain() { }", dinit(CheckOptions, $.s = &s));
         ASSERT_EQUALS("", errout_str());
     }
 
     void entrypointsUnix() {
         check("int _init() { }\n"
               "int _fini() { }\n");
-        ASSERT_EQUALS("[test.cpp:1]: (style) The function '_init' is never used.\n"
-                      "[test.cpp:2]: (style) The function '_fini' is never used.\n", errout_str());
+        ASSERT_EQUALS("[test.cpp:1:0]: (style) The function '_init' is never used. [unusedFunction]\n"
+                      "[test.cpp:2:0]: (style) The function '_fini' is never used. [unusedFunction]\n", errout_str());
 
         const Settings s = settingsBuilder(settings).library("gnu.cfg").build();
 
         check("int _init() { }\n"
-              "int _fini() { }\n", Platform::Type::Native, &s);
+              "int _fini() { }\n", dinit(CheckOptions, $.s = &s));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -684,8 +743,102 @@ private:
         const char code[] = R"(#include "test.h")";
         ScopedFile header("test.h", inc);
         const std::string processed = PreprocessorHelper::getcode(settings, *this, code, "", "test.cpp");
-        check(processed.c_str());
-        TODO_ASSERT_EQUALS("[test.h:3]: (style) The function 'f' is never used.\n", "[test.cpp:3]: (style) The function 'f' is never used.\n", errout_str());
+        check(processed);
+        TODO_ASSERT_EQUALS("[test.h:3:0]: (style) The function 'f' is never used. [unusedFunction]\n", "[test.cpp:3:0]: (style) The function 'f' is never used. [unusedFunction]\n", errout_str());
+    }
+
+    void virtualFunc()
+    {
+        check("struct D : public B {\n" // #10660
+              "    virtual void f() {}\n"
+              "    void g() override {}\n"
+              "    void h() final {}\n"
+              "};\n");
+        ASSERT_EQUALS("", errout_str());
+
+        check("struct B {\n"
+              "    virtual void f() = 0;\n"
+              "    void g();\n"
+              "};\n"
+              "struct D : B {\n"
+              "    void f() override {}\n"
+              "};\n"
+              "int main() {\n"
+              "    D d;\n"
+              "    d.g();\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void parensInit()
+    {
+        check("struct S {\n" // #12898
+              "    void url() {}\n"
+              "};\n"
+              "int main() {\n"
+              "    const int url(0);\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:2:0]: (style) The function 'url' is never used. [unusedFunction]\n", errout_str());
+    }
+
+    void typeInCast()
+    {
+        check("struct S {\n" // #12901
+              "    void Type() {}\n"
+              "};\n"
+              "int main() {\n"
+              "    struct Type {} t;\n"
+              "    Type t2{ (Type)t };\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:2:0]: (style) The function 'Type' is never used. [unusedFunction]\n", errout_str());
+    }
+
+    void attributeCleanup()
+    {
+        check("void clean(void *ptr) {}\n"
+              "int main() {\n"
+              "    void * __attribute__((cleanup(clean))) p;\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void attributeUnused()
+    {
+        check("[[unused]] void f() {}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        check("[[gnu::unused]] void f() {}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        check("__attribute__((unused)) void f() {}\n");
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void attributeMaybeUnused()
+    {
+        check("[[__maybe_unused__]] void f() {}\n", dinit(CheckOptions, $.cpp = false));
+        ASSERT_EQUALS("", errout_str());
+
+        check("[[maybe_unused]] void f() {}\n", dinit(CheckOptions, $.cpp = false));
+        ASSERT_EQUALS("", errout_str());
+
+        check("[[maybe_unused]] void f() {}\n");
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void staticFunction()
+    {
+        check("void f(void) {}\n"
+              "int main() {\n"
+              "    f();\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        check("void f(void) {}\n"
+              "int main() {\n"
+              "    f();\n"
+              "}\n", dinit(CheckOptions, $.cpp = false));
+        ASSERT_EQUALS("[test.c:1:0]: (style) The function 'f' should have static linkage since it is not used outside of its translation unit. [staticFunction]\n", errout_str());
     }
 };
 

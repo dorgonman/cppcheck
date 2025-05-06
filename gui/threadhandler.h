@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,7 +23,9 @@
 #include "suppressions.h"
 #include "threadresult.h"
 
+#include <memory>
 #include <set>
+#include <string>
 
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -57,7 +59,7 @@ public:
      * @brief Set the number of threads to use
      * @param count The number of threads to use
      */
-    void setThreadCount(const int count);
+    void setThreadCount(int count);
 
     /**
      * @brief Initialize the threads (connect all signals to resultsview's slots)
@@ -114,8 +116,9 @@ public:
      * @brief Start the threads to check the files
      *
      * @param settings Settings for checking
+     * @param supprs Suppressions for checking
      */
-    void check(const Settings &settings);
+    void check(const Settings &settings, const std::shared_ptr<Suppressions>& supprs);
 
     /**
      * @brief Set files to check
@@ -257,6 +260,7 @@ protected:
     int mRunningThreadCount{};
 
     bool mAnalyseWholeProgram{};
+    std::string mCtuInfo;
 
     QStringList mAddonsAndTools;
     QList<SuppressionList::Suppression> mSuppressions;

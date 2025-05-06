@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,11 +26,11 @@
 
 #include <cstddef>
 #include <iosfwd>
+#include <memory>
 #include <string>
 #include <vector>
 
 class Token;
-class TokenList;
 class Settings;
 
 namespace simplecpp {
@@ -44,10 +44,8 @@ namespace simplecpp {
  * @brief This struct stores pointers to the front and back tokens of the list this token is in.
  */
 struct TokensFrontBack {
-    explicit TokensFrontBack(const TokenList& list) : list(list) {}
     Token *front{};
     Token* back{};
-    const TokenList& list;
 };
 
 class CPPCHECKLIB TokenList {
@@ -59,6 +57,8 @@ public:
     TokenList(const TokenList &) = delete;
     TokenList &operator=(const TokenList &) = delete;
 
+    TokenList(TokenList&& other) NOEXCEPT = default;
+
     /** @return the source file path. e.g. "file.cpp" */
     const std::string& getSourceFilePath() const;
 
@@ -68,7 +68,8 @@ public:
     /** @return true if the code is C++ */
     bool isCPP() const;
 
-    void setLang(Standards::Language lang);
+    // TODO: get rid of this
+    void setLang(Standards::Language lang, bool force = false);
 
     /**
      * Delete all tokens in given token list
@@ -76,10 +77,10 @@ public:
      */
     static void deleteTokens(Token *tok);
 
-    void addtoken(const std::string& str, const nonneg int lineno, const nonneg int column, const nonneg int fileno, bool split = false);
+    void addtoken(const std::string& str, nonneg int lineno, nonneg int column, nonneg int fileno, bool split = false);
     void addtoken(const std::string& str, const Token *locationTok);
 
-    void addtoken(const Token *tok, const nonneg int lineno, const nonneg int column, const nonneg int fileno);
+    void addtoken(const Token *tok, nonneg int lineno, nonneg int column, nonneg int fileno);
     void addtoken(const Token *tok, const Token *locationTok);
     void addtoken(const Token *tok);
 
@@ -93,7 +94,7 @@ public:
      * @param one_line true=>copy all tokens to the same line as dest. false=>copy all tokens to dest while keeping the 'line breaks'
      * @return new location of last token copied
      */
-    static Token *copyTokens(Token *dest, const Token *first, const Token *last, bool one_line = true);
+    RET_NONNULL static Token *copyTokens(Token *dest, const Token *first, const Token *last, bool one_line = true);
 
     /**
      * Create tokens from code.
@@ -102,9 +103,8 @@ public:
      * - UTF in the code are not handled.
      * - comments are not handled.
      * @param code input stream for code
-     * @param file0 source file name
+     * @param lang the language of the code
      */
-    bool createTokens(std::istream &code, const std::string& file0);
     bool createTokens(std::istream &code, Standards::Language lang);
 
     void createTokens(simplecpp::TokenList&& tokenList);
@@ -117,20 +117,20 @@ public:
 
     /** get first token of list */
     const Token *front() const {
-        return mTokensFrontBack.front;
+        return mTokensFrontBack->front;
     }
     // NOLINTNEXTLINE(readability-make-member-function-const) - do not allow usage of mutable pointer from const object
     Token *front() {
-        return mTokensFrontBack.front;
+        return mTokensFrontBack->front;
     }
 
     /** get last token of list */
     const Token *back() const {
-        return mTokensFrontBack.back;
+        return mTokensFrontBack->back;
     }
     // NOLINTNEXTLINE(readability-make-member-function-const) - do not allow usage of mutable pointer from const object
     Token *back() {
-        return mTokensFrontBack.back;
+        return mTokensFrontBack->back;
     }
 
     /**
@@ -200,13 +200,21 @@ public:
 
     bool isKeyword(const std::string &str) const;
 
+    /**
+     * is token pointing at function head?
+     * @param tok         A '(' or ')' token in a possible function head
+     * @param endsWith    string after function head
+     * @return token matching with endsWith if syntax seems to be a function head else nullptr
+     */
+    static const Token * isFunctionHead(const Token *tok, const std::string &endsWith);
+
 private:
     void determineCppC();
 
     bool createTokensInternal(std::istream &code, const std::string& file0);
 
     /** Token list */
-    TokensFrontBack mTokensFrontBack;
+    std::shared_ptr<TokensFrontBack> mTokensFrontBack;
 
     /** filenames for the tokenized source code (source + included) */
     std::vector<std::string> mFiles;

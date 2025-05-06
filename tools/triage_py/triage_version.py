@@ -28,9 +28,10 @@ args = parser.parse_args()
 
 def sort_commit_hashes(commits):
     git_cmd = 'git rev-list --abbrev-commit --topo-order --no-walk=sorted --reverse ' + ' '.join(commits)
-    p = subprocess.Popen(git_cmd.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=git_repo, universal_newlines=True)
-    stdout, stderr = p.communicate()
-    if p.returncode != 0:
+    with subprocess.Popen(git_cmd.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=git_repo, universal_newlines=True) as p:
+        stdout, stderr = p.communicate()
+        rc = p.returncode
+    if rc != 0:
         print('error: sorting commit hashes failed')
         print(stderr)
         sys.exit(1)
@@ -131,7 +132,9 @@ for entry in versions:
     else:
         # get version string
         version_cmd = exe + ' ' + '--version'
-        version = subprocess.Popen(version_cmd.split(), stdout=subprocess.PIPE, universal_newlines=True).stdout.read().strip()
+        with subprocess.Popen(version_cmd.split(), stdout=subprocess.PIPE, universal_newlines=True) as p:
+            # TODO: handle p.returncode?
+            version = p.stdout.read().strip()
         # sanitize version
         version = version.replace('Cppcheck ', '').replace(' dev', '')
 
@@ -180,22 +183,23 @@ for entry in versions:
         start = time.time_ns()
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=exe_path, universal_newlines=True)
     try:
-        comm = p.communicate(timeout=args.timeout)
+        stdout, stderr = p.communicate(timeout=args.timeout)
         if args.perf:
             end = time.time_ns()
         out = ''
         if not args.no_stdout:
-            out += comm[0]
+            out += stdout
         if not args.no_stdout and not args.no_stderr:
             out += '\n'
         if not args.no_stderr:
-            out += comm[1]
+            out += stderr
     except subprocess.TimeoutExpired:
         out = "timeout"
         p.kill()
-        comm = p.communicate()
+        p.communicate()
 
     ec = p.returncode
+    p = None
 
     if not do_compare:
         if not use_hashes:
@@ -205,7 +209,7 @@ for entry in versions:
         if args.perf:
             if out == "timeout":
                 data_str = "0.0" # TODO: how to handle these properly?
-            elif not ec == 0:
+            elif ec != 0:
                 continue # skip errors
             else:
                 data_str = '{}'.format((end - start) / 1000.0 / 1000.0 / 1000.0)

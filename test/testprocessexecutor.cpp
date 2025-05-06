@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,12 +16,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "processexecutor.h"
-#include "redirect.h"
-#include "settings.h"
 #include "filesettings.h"
 #include "fixture.h"
 #include "helpers.h"
+#include "processexecutor.h"
+#include "redirect.h"
+#include "settings.h"
+#include "standards.h"
 #include "suppressions.h"
 #include "timer.h"
 
@@ -72,18 +73,18 @@ private:
         if (opt.filesList.empty()) {
             for (int i = 1; i <= files; ++i) {
                 std::string f_s = fprefix() + "_" + std::to_string(i) + ".cpp";
-                filelist.emplace_back(f_s, data.size());
+                filelist.emplace_back(f_s, Standards::Language::CPP, data.size());
                 if (useFS) {
-                    fileSettings.emplace_back(std::move(f_s), data.size());
+                    fileSettings.emplace_back(std::move(f_s), Standards::Language::CPP, data.size());
                 }
             }
         }
         else {
             for (const auto& f : opt.filesList)
             {
-                filelist.emplace_back(f, data.size());
+                filelist.emplace_back(f, Standards::Language::CPP, data.size());
                 if (useFS) {
-                    fileSettings.emplace_back(f, data.size());
+                    fileSettings.emplace_back(f, Standards::Language::CPP, data.size());
                 }
             }
         }
@@ -94,6 +95,8 @@ private:
         s.quiet = opt.quiet;
         if (opt.plistOutput)
             s.plistOutput = opt.plistOutput;
+        s.templateFormat = "{callstack}: ({severity}) {inconclusive:inconclusive: }{message}";
+        Suppressions supprs;
 
         bool executeCommandCalled = false;
         std::string exe;
@@ -108,19 +111,19 @@ private:
 
         std::vector<std::unique_ptr<ScopedFile>> scopedfiles;
         scopedfiles.reserve(filelist.size());
-        for (std::list<FileWithDetails>::const_iterator i = filelist.cbegin(); i != filelist.cend(); ++i)
+        for (auto i = filelist.cbegin(); i != filelist.cend(); ++i)
             scopedfiles.emplace_back(new ScopedFile(i->path(), data));
 
         // clear files list so only fileSettings are used
         if (useFS)
             filelist.clear();
 
-        ProcessExecutor executor(filelist, fileSettings, s, s.supprs.nomsg, *this, executeFn);
+        ProcessExecutor executor(filelist, fileSettings, s, supprs, *this, executeFn);
         ASSERT_EQUALS(result, executor.check());
         ASSERT_EQUALS(opt.executeCommandCalled, executeCommandCalled);
         ASSERT_EQUALS(opt.exe, exe);
         ASSERT_EQUALS(opt.args.size(), args.size());
-        for (int i = 0; i < args.size(); ++i)
+        for (std::size_t i = 0; i < args.size(); ++i)
         {
             ASSERT_EQUALS(opt.args[i], args[i]);
         }
@@ -128,6 +131,7 @@ private:
 
     void run() override {
 #if !defined(WIN32) && !defined(__MINGW32__) && !defined(__CYGWIN__)
+        mNewTemplate = true;
         TEST_CASE(deadlock_with_many_errors);
         TEST_CASE(many_threads);
         TEST_CASE(many_threads_showtime);
@@ -144,6 +148,7 @@ private:
         TEST_CASE(showtime_summary);
         TEST_CASE(showtime_file_total);
         TEST_CASE(suppress_error_library);
+        TEST_CASE(unique_errors);
 #endif // !WIN32
     }
 
@@ -231,7 +236,7 @@ private:
               "  {int i = *((int*)0);}\n"
               "  return 0;\n"
               "}");
-        ASSERT_EQUALS("[" + fprefix() + "_1.cpp:3]: (error) Null pointer dereference: (int*)0\n", errout_str());
+        ASSERT_EQUALS("[" + fprefix() + "_1.cpp:3:14]: (error) Null pointer dereference: (int*)0 [nullPointer]\n", errout_str());
     }
 
     void one_error_several_files() {
@@ -337,9 +342,9 @@ private:
 
     void suppress_error_library() {
         SUPPRESS;
-        const Settings settingsOld = settings;
+        const Settings settingsOld = settings; // TODO: get rid of this
         const char xmldata[] = R"(<def format="2"><markup ext=".cpp" reporterrors="false"/></def>)";
-        settings = settingsBuilder().libraryxml(xmldata, sizeof(xmldata)).build();
+        settings = settingsBuilder().libraryxml(xmldata).build();
         check(2, 1, 0,
               "int main()\n"
               "{\n"
@@ -360,7 +365,7 @@ private:
         check(2, 2, 2,
               "#include \"" + inc_h.name() +"\"");
         // this is made unique by the executor
-        ASSERT_EQUALS("[" + inc_h.name() + ":3]: (error) Null pointer dereference: (int*)0\n", errout_str());
+        ASSERT_EQUALS("[" + inc_h.name() + ":3:11]: (error) Null pointer dereference: (int*)0 [nullPointer]\n", errout_str());
     }
 
     // TODO: test whole program analysis

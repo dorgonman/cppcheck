@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,7 @@
 #include "config.h"
 #include "tokenlist.h"
 
+#include <cstdint>
 #include <iosfwd>
 #include <list>
 #include <map>
@@ -36,8 +37,8 @@ class TimerResults;
 class Token;
 class TemplateSimplifier;
 class ErrorLogger;
-struct Directive; // IWYU pragma: keep
-enum class Severity;
+struct Directive;
+enum class Severity : std::uint8_t;
 
 /// @addtogroup Core
 /// @{
@@ -53,7 +54,7 @@ class CPPCHECKLIB Tokenizer {
     friend class TestTokenizer;
 
 public:
-    explicit Tokenizer(const Settings & settings, ErrorLogger &errorLogger);
+    Tokenizer(TokenList tokenList, const Settings & settings, ErrorLogger &errorLogger);
     ~Tokenizer();
 
     void setTimerResults(TimerResults *tr) {
@@ -132,7 +133,7 @@ private:
 
     /** Insert array size where it isn't given */
     void arraySize();
-    void arraySizeAfterValueFlow(); // cppcheck-suppress functionConst
+    void arraySizeAfterValueFlow();
 
     /** Simplify labels and 'case|default' syntaxes.
      */
@@ -163,15 +164,15 @@ private:
      * Simplify variable declarations (split up)
      * \param only_k_r_fpar Only simplify K&R function parameters
      */
-    void simplifyVarDecl(const bool only_k_r_fpar);
-    void simplifyVarDecl(Token * tokBegin, const Token * const tokEnd, const bool only_k_r_fpar); // cppcheck-suppress functionConst // has side effects
+    void simplifyVarDecl( bool only_k_r_fpar);
+    void simplifyVarDecl(Token * tokBegin, const Token * tokEnd, bool only_k_r_fpar);
 
     /**
      * Simplify variable initialization
      * '; int *p(0);' => '; int *p = 0;'
      */
     void simplifyInitVar();
-    static Token* initVar(Token* tok);
+    RET_NONNULL static Token* initVar(Token* tok);
 
     /**
      * Simplify the location of "static" and "const" qualifiers in
@@ -310,11 +311,13 @@ private:
 
     void simplifyExternC();
 
-    void simplifyRoundCurlyParentheses();
+    void simplifyCompoundStatements();
 
     void simplifyTypeIntrinsics();
 
     void simplifySQL();
+
+    void simplifyParenthesizedLibraryFunctions();
 
     void checkForEnumsWithTypedef();
 
@@ -329,14 +332,6 @@ private:
     static std::string simplifyString(const std::string &source);
 
 public:
-    /**
-     * is token pointing at function head?
-     * @param tok         A '(' or ')' token in a possible function head
-     * @param endsWith    string after function head
-     * @return token matching with endsWith if syntax seems to be a function head else nullptr
-     */
-    static const Token * isFunctionHead(const Token *tok, const std::string &endsWith);
-
     bool hasIfdef(const Token *start, const Token *end) const;
 
     bool isPacked(const Token * bodyStart) const;
@@ -373,7 +368,7 @@ private:
 public:
 
     /** Syntax error */
-    NORETURN void syntaxError(const Token *tok, const std::string &code = emptyString) const;
+    NORETURN void syntaxError(const Token *tok, const std::string &code = "") const;
 
     /** Syntax error. Unmatched character. */
     NORETURN void unmatchedToken(const Token *tok) const;
@@ -389,11 +384,13 @@ public:
 private:
 
     /** Report that there is an unhandled "class x y {" code */
-    void unhandled_macro_class_x_y(const Token *tok) const;
+    void unhandled_macro_class_x_y(const Token *tok, const std::string& type, const std::string& x, const std::string& y, const std::string& bracket) const;
 
     /** Check configuration (unknown macros etc) */
     void checkConfiguration() const;
     void macroWithSemicolonError(const Token *tok, const std::string &macroName) const;
+
+    void invalidConstFunctionTypeError(const Token *tok) const;
 
     /**
      * Is there C++ code in C file?
@@ -506,7 +503,7 @@ private:
     void simplifyOverloadedOperators();
 
     /**
-     * Remove [[attribute]] (C++11 and later) from TokenList
+     * Remove [[attribute]] (C++11, C23) from TokenList
      */
     void simplifyCPPAttribute();
 
@@ -535,7 +532,7 @@ private:
     /**
      * report error message
      */
-    void reportError(const Token* tok, const Severity severity, const std::string& id, const std::string& msg, bool inconclusive = false) const;
+    void reportError(const Token* tok, Severity severity, const std::string& id, const std::string& msg, bool inconclusive = false) const;
     void reportError(const std::list<const Token*>& callstack, Severity severity, const std::string& id, const std::string& msg, bool inconclusive = false) const;
 
     bool duplicateTypedef(Token *&tokPtr, const Token *name, const Token *typeDef) const;
@@ -543,8 +540,8 @@ private:
     void unsupportedTypedef(const Token *tok) const;
 
     static void setVarIdClassFunction(const std::string &classname,
-                                      Token * const startToken,
-                                      const Token * const endToken,
+                                      Token * startToken,
+                                      const Token * endToken,
                                       const std::map<std::string, nonneg int> &varlist,
                                       std::map<nonneg int, std::map<std::string, nonneg int>>& structMembers,
                                       nonneg int &varId_);
@@ -570,7 +567,7 @@ public:
      * 1=1st simplifications
      * 2=2nd simplifications
      */
-    void printDebugOutput(int simplification) const;
+    void printDebugOutput(int simplification, std::ostream &out) const;
 
     void dump(std::ostream &out) const;
 
@@ -626,6 +623,9 @@ public:
 
     void setDirectives(std::list<Directive> directives);
 
+    std::string dumpTypedefInfo() const;
+
+    static void getErrorMessages(ErrorLogger& errorLogger, const Settings& settings);
 private:
     const Token *processFunc(const Token *tok2, bool inOperator) const;
     Token *processFunc(Token *tok2, bool inOperator);
@@ -665,6 +665,7 @@ private:
         int lineNumber;
         int column;
         bool used;
+        bool isFunctionPointer;
     };
     std::vector<TypedefInfo> mTypedefInfo;
 

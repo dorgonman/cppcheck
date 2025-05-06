@@ -1,4 +1,4 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
  * Copyright (C) 2007-2024 Cppcheck team.
  *
@@ -20,9 +20,9 @@
 #define CMDLINE_PARSER_H
 
 #include <cstddef>
+#include <cstdint>
 #include <list>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "cmdlinelogger.h"
@@ -56,7 +56,7 @@ public:
      */
     CmdLineParser(CmdLineLogger &logger, Settings &settings, Suppressions &suppressions);
 
-    enum class Result { Success, Exit, Fail };
+    enum class Result : std::uint8_t { Success, Exit, Fail };
 
     /**
      * @brief Parse command line args and fill settings and file lists
@@ -138,7 +138,7 @@ private:
      * Tries to load a library and prints warning/error messages
      * @return false, if an error occurred (except unknown XML elements)
      */
-    bool tryLoadLibrary(Library& destination, const std::string& basepath, const char* filename);
+    bool tryLoadLibrary(Library& destination, const std::string& basepath, const char* filename, bool debug);
 
     /**
      * @brief Load libraries
@@ -164,7 +164,6 @@ private:
     std::vector<std::string> mIgnoredPaths;
     Settings &mSettings;
     Suppressions &mSuppressions;
-    std::string mVSConfig;
 };
 
 /// @}

@@ -87,7 +87,7 @@ CppcheckLibraryData::Function *LibraryDialog::currentFunction()
     QList<QListWidgetItem *> selitems = mUi->functions->selectedItems();
     if (selitems.count() != 1)
         return nullptr;
-    return static_cast<FunctionListItem *>(selitems.first())->function;
+    return dynamic_cast<FunctionListItem *>(selitems.first())->function;
 }
 
 void LibraryDialog::openCfg()
@@ -313,7 +313,7 @@ void LibraryDialog::changeFunction()
         return;
 
     function->comments   = mUi->comments->toPlainText();
-    function->noreturn   = (CppcheckLibraryData::Function::TrueFalseUnknown)mUi->noreturn->currentIndex();
+    function->noreturn   = static_cast<CppcheckLibraryData::Function::TrueFalseUnknown>(mUi->noreturn->currentIndex());
     function->useretval  = mUi->useretval->isChecked();
     function->leakignore = mUi->leakignore->isChecked();
 
@@ -351,7 +351,7 @@ QString LibraryDialog::getArgText(const CppcheckLibraryData::Function::Arg &arg)
     s += "\n    not uninit: " +  QString(bool_to_string(arg.notuninit));
     s += "\n    format string: " +  QString(bool_to_string(arg.formatstr));
     s += "\n    strz: " +  QString(bool_to_string(arg.strz));
-    s += "\n    valid: " + QString(arg.valid.isEmpty() ? "any" : arg.valid);
+    s += "\n    valid: " + (arg.valid.isEmpty() ? "any" : arg.valid);
     for (const CppcheckLibraryData::Function::Arg::MinSize &minsize : arg.minsizes) {
         s += "\n    minsize: " + minsize.type + " " + minsize.arg + " " + minsize.arg2;
     }

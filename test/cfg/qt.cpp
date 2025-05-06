@@ -2,7 +2,7 @@
 // Test library configuration for qt.cfg
 //
 // Usage:
-// $ cppcheck --check-library --library=qt --enable=style,information --inconclusive --error-exitcode=1 --disable=missingInclude --inline-suppr test/cfg/qt.cpp
+// $ cppcheck --check-library --library=qt --enable=style,information --inconclusive --error-exitcode=1 --inline-suppr test/cfg/qt.cpp
 // =>
 // No warnings about bad library configuration, unmatched suppressions, etc. exitcode=0
 //
@@ -209,6 +209,12 @@ QStringList QString6(QString s) {
 // cppcheck-suppress passedByValue
 bool QString7(QString s, const QString& l) {
     return l.startsWith(s);
+}
+
+void QString_split(const char* name) { // #12998
+    // cppcheck-suppress valueFlowBailoutIncompleteVar // FIXME
+    QStringList qsl = QString(name).split(';', Qt::SkipEmptyParts);
+    if (qsl.isEmpty()) {}
 }
 
 namespace NTestStd // #12355
@@ -661,6 +667,7 @@ namespace {
     private slots:
         void foo();
     };
+    // cppcheck-suppress functionStatic
     void Fred::foo() {}
 
     // bitfields14
@@ -720,6 +727,7 @@ namespace {
         ~MyObject1() {}
     public slots:
     signals:
+        // cppcheck-suppress functionStatic
         void test() {}
     };
 
@@ -775,3 +783,46 @@ void unusedVariable_qtContainers() // #10689
     QLatin1String ql1s;
 }
 
+void unreadVariable_QMapIterator(QMap<QString, QObject*>& m)
+{
+    auto it = m.find("abc"); // #12662
+    if (it != m.end()) {
+        // cppcheck-suppress checkLibraryFunction // TODO
+        delete it.value();
+        // cppcheck-suppress checkLibraryFunction
+        it.value() = new QObject();
+    }
+}
+
+void constVariablePointer_QVector(QVector<int*>& qv, int* p)
+{
+    qv.push_back(p); // #12661
+}
+
+const QString& unassignedVariable_static_QString() // #12935
+{
+    static QString qs;
+    return qs;
+}
+
+struct BQObject_missingOverride { // #13406
+    Q_OBJECT
+};
+
+struct DQObject_missingOverride : BQObject_missingOverride {
+    Q_OBJECT
+};
+
+namespace {
+    class TestUnusedFunction : public QObject { // #13236
+        TestUnusedFunction();
+        void doStuff();
+    };
+
+    TestUnusedFunction::TestUnusedFunction() {
+        QObject::connect(this, SIGNAL(doStuff()), SLOT(doStuff()));
+    }
+
+    // cppcheck-suppress functionStatic
+    void TestUnusedFunction::doStuff() {} // Should not warn here with unusedFunction
+}

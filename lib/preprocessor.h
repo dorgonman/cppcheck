@@ -1,4 +1,4 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
  * Copyright (C) 2007-2024 Cppcheck team.
  *
@@ -24,11 +24,13 @@
 #include "config.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <istream>
 #include <list>
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <simplecpp.h>
@@ -42,7 +44,7 @@ class SuppressionList;
  * Each preprocessor directive (\#include, \#define, \#undef, \#if, \#ifdef, \#else, \#endif)
  * will be recorded as an instance of this class.
  *
- * file and linenr denote the location where where the directive is defined.
+ * file and linenr denote the location where the directive is defined.
  *
  */
 
@@ -56,8 +58,36 @@ struct CPPCHECKLIB Directive {
     /** the actual directive text */
     std::string str;
 
+    struct DirectiveToken {
+        explicit DirectiveToken(const simplecpp::Token & _tok);
+        int line;
+        int column;
+        std::string tokStr;
+    };
+
+    std::vector<DirectiveToken> strTokens;
+
     /** record a directive (possibly filtering src) */
-    Directive(std::string _file, const int _linenr, const std::string &_str);
+    Directive(const simplecpp::Location & _loc, std::string _str);
+    Directive(std::string _file, int _linenr, std::string _str);
+};
+
+class CPPCHECKLIB RemarkComment {
+public:
+    RemarkComment(std::string file, unsigned int lineNumber, std::string str)
+        : file(std::move(file))
+        , lineNumber(lineNumber)
+        , str(std::move(str))
+    {}
+
+    /** name of file */
+    std::string file;
+
+    /** line number for the code that the remark comment is about */
+    unsigned int lineNumber;
+
+    /** remark text */
+    std::string str;
 };
 
 /// @addtogroup Core
@@ -75,15 +105,6 @@ class CPPCHECKLIB WARN_UNUSED Preprocessor {
     friend class TestUnusedVar;
 
 public:
-
-    /**
-     * Include file types.
-     */
-    enum HeaderTypes {
-        UserHeader = 1,
-        SystemHeader
-    };
-
     /** character that is inserted in expanded macros */
     static char macroChar;
 
@@ -96,17 +117,17 @@ public:
 
     std::set<std::string> getConfigs(const simplecpp::TokenList &tokens) const;
 
-    void handleErrors(const simplecpp::OutputList &outputList, bool throwError);
+    std::vector<RemarkComment> getRemarkComments(const simplecpp::TokenList &tokens) const;
 
     bool loadFiles(const simplecpp::TokenList &rawtokens, std::vector<std::string> &files);
 
-    void removeComments();
+    void removeComments(simplecpp::TokenList &tokens);
 
-    void setPlatformInfo(simplecpp::TokenList *tokens) const;
+    static void setPlatformInfo(simplecpp::TokenList &tokens, const Settings& settings);
 
     simplecpp::TokenList preprocess(const simplecpp::TokenList &tokens1, const std::string &cfg, std::vector<std::string> &files, bool throwError = false);
 
-    std::string getcode(const simplecpp::TokenList &tokens1, const std::string &cfg, std::vector<std::string> &files, const bool writeLocations);
+    std::string getcode(const simplecpp::TokenList &tokens1, const std::string &cfg, std::vector<std::string> &files, bool writeLocations);
 
     /**
      * Calculate HASH. Using toolinfo, tokens1, filedata.
@@ -117,7 +138,7 @@ public:
      */
     std::size_t calculateHash(const simplecpp::TokenList &tokens1, const std::string &toolinfo) const;
 
-    void simplifyPragmaAsm(simplecpp::TokenList *tokenList) const;
+    void simplifyPragmaAsm(simplecpp::TokenList &tokenList) const;
 
     static void getErrorMessages(ErrorLogger &errorLogger, const Settings &settings);
 
@@ -126,17 +147,29 @@ public:
      */
     void dump(std::ostream &out) const;
 
-    void reportOutput(const simplecpp::OutputList &outputList, bool showerror);
-
     static bool hasErrors(const simplecpp::Output &output);
 
 private:
-    static void simplifyPragmaAsmPrivate(simplecpp::TokenList *tokenList);
+    void handleErrors(const simplecpp::OutputList &outputList, bool throwError);
+
+    void reportOutput(const simplecpp::OutputList &outputList, bool showerror);
+
+    static void simplifyPragmaAsmPrivate(simplecpp::TokenList &tokenList);
+
+    /**
+     * Include file types.
+     */
+    enum HeaderTypes : std::uint8_t {
+        UserHeader = 1,
+        SystemHeader
+    };
 
     void missingInclude(const std::string &filename, unsigned int linenr, const std::string &header, HeaderTypes headerType);
     void error(const std::string &filename, unsigned int linenr, const std::string &msg);
 
     static bool hasErrors(const simplecpp::OutputList &outputList);
+
+    void addRemarkComments(const simplecpp::TokenList &tokens, std::vector<RemarkComment> &remarkComments) const;
 
     const Settings& mSettings;
     ErrorLogger &mErrorLogger;

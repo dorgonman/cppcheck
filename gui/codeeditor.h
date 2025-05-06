@@ -1,4 +1,4 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
  * Copyright (C) 2007-2024 Cppcheck team.
  *
@@ -19,6 +19,8 @@
 #ifndef CODEEDITOR_H
 #define CODEEDITOR_H
 
+#include <cstdint>
+
 #include <QObject>
 #include <QPlainTextEdit>
 #include <QRegularExpression>
@@ -33,7 +35,6 @@
 class CodeEditorStyle;
 class QPaintEvent;
 class QRect;
-class QResizeEvent;
 class QTextDocument;
 
 class Highlighter : public QSyntaxHighlighter {
@@ -51,7 +52,7 @@ protected:
     void highlightBlock(const QString &text) override;
 
 private:
-    enum RuleRole {
+    enum RuleRole : std::uint8_t {
         Keyword = 1,
         Class   = 2,
         Comment = 3,

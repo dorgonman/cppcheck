@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -41,6 +41,7 @@ private:
         TEST_CASE(emptymaskpath3);
         TEST_CASE(onemaskemptypath);
         TEST_CASE(onemasksamepath);
+        TEST_CASE(onemasksamepathdifferentslash);
         TEST_CASE(onemasksamepathdifferentcase);
         TEST_CASE(onemasksamepathwithfile);
         TEST_CASE(onemaskshorterpath);
@@ -51,6 +52,7 @@ private:
         TEST_CASE(onemasklongerpath1);
         TEST_CASE(onemasklongerpath2);
         TEST_CASE(onemasklongerpath3);
+        TEST_CASE(onemaskcwd);
         TEST_CASE(twomasklongerpath1);
         TEST_CASE(twomasklongerpath2);
         TEST_CASE(twomasklongerpath3);
@@ -59,10 +61,12 @@ private:
         TEST_CASE(filemaskdifferentcase);
         TEST_CASE(filemask2);
         TEST_CASE(filemask3);
+        TEST_CASE(filemaskcwd);
         TEST_CASE(filemaskpath1);
         TEST_CASE(filemaskpath2);
         TEST_CASE(filemaskpath3);
         TEST_CASE(filemaskpath4);
+        TEST_CASE(mixedallmatch);
     }
 
     // Test empty PathMatch
@@ -80,6 +84,7 @@ private:
 
     void emptymaskpath3() const {
         ASSERT(!emptyMatcher.match("/home/user/code/src/"));
+        ASSERT(!emptyMatcher.match("d:/home/user/code/src/"));
     }
 
     // Test PathMatch containing "src/"
@@ -89,6 +94,11 @@ private:
 
     void onemasksamepath() const {
         ASSERT(srcMatcher.match("src/"));
+    }
+
+    void onemasksamepathdifferentslash() const {
+        const PathMatch srcMatcher2{std::vector<std::string>(1, "src\\")};
+        ASSERT(srcMatcher2.match("src/"));
     }
 
     void onemasksamepathdifferentcase() const {
@@ -128,6 +138,7 @@ private:
 
     void onemasklongerpath1() const {
         ASSERT(srcMatcher.match("/tmp/src/"));
+        ASSERT(srcMatcher.match("d:/tmp/src/"));
     }
 
     void onemasklongerpath2() const {
@@ -136,6 +147,10 @@ private:
 
     void onemasklongerpath3() const {
         ASSERT(srcMatcher.match("project/src/module/"));
+    }
+
+    void onemaskcwd() const {
+        ASSERT(!srcMatcher.match("./src"));
     }
 
     void twomasklongerpath1() const {
@@ -181,6 +196,10 @@ private:
         ASSERT(fooCppMatcher.match("src/foo.cpp"));
     }
 
+    void filemaskcwd() const {
+        ASSERT(fooCppMatcher.match("./lib/foo.cpp"));
+    }
+
     // Test PathMatch containing "src/foo.cpp"
     void filemaskpath1() const {
         ASSERT(srcFooCppMatcher.match("src/foo.cpp"));
@@ -196,6 +215,14 @@ private:
 
     void filemaskpath4() const {
         ASSERT(!srcFooCppMatcher.match("bar/foo.cpp"));
+    }
+
+    void mixedallmatch() const { // #13570
+        // when trying to match a directory against a directory entry it erroneously modified a local variable also used for file matching
+        std::vector<std::string> masks = { "tests/", "file.c" };
+        PathMatch match(std::move(masks));
+        ASSERT(match.match("tests/"));
+        ASSERT(match.match("lib/file.c"));
     }
 };
 

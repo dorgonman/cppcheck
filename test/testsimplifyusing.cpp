@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,13 +22,10 @@
 #include "platform.h"
 #include "settings.h"
 #include "token.h"
-#include "tokenize.h"
-#include "tokenlist.h"
 #include "utils.h"
 
-#include <sstream>
+#include <cstddef>
 #include <string>
-#include <vector>
 
 class TestSimplifyUsing : public TestFixture {
 public:
@@ -69,6 +66,11 @@ private:
         TEST_CASE(simplifyUsing28);
         TEST_CASE(simplifyUsing29);
         TEST_CASE(simplifyUsing30);
+        TEST_CASE(simplifyUsing31);
+        TEST_CASE(simplifyUsing32);
+        TEST_CASE(simplifyUsing33);
+        TEST_CASE(simplifyUsing34);
+        TEST_CASE(simplifyUsing35);
 
         TEST_CASE(simplifyUsing8970);
         TEST_CASE(simplifyUsing8971);
@@ -94,16 +96,22 @@ private:
         TEST_CASE(scopeInfo2);
     }
 
-#define tok(...) tok_(__FILE__, __LINE__, __VA_ARGS__)
-    std::string tok_(const char* file, int line, const char code[], Platform::Type type = Platform::Type::Native, bool debugwarnings = true, bool preprocess = false) {
-        const Settings settings = settingsBuilder(settings0).certainty(Certainty::inconclusive).debugwarnings(debugwarnings).platform(type).build();
+    struct TokOptions
+    {
+        TokOptions() = default;
+        Platform::Type type = Platform::Type::Native;
+        bool debugwarnings = true;
+        bool preprocess = false;
+    };
 
-        if (preprocess) {
-            Tokenizer tokenizer(settings, *this);
-            std::vector<std::string> files(1, "test.cpp");
-            PreprocessorHelper::preprocess(code, files, tokenizer, *this);
-            std::istringstream istr(code);
-            ASSERT_LOC(tokenizer.list.createTokens(istr, "test.cpp"), file, line); // TODO: this creates the tokens a second time
+#define tok(...) tok_(__FILE__, __LINE__, __VA_ARGS__)
+    template<size_t size>
+    std::string tok_(const char* file, int line, const char (&code)[size], const TokOptions& options = make_default_obj()) {
+        const Settings settings = settingsBuilder(settings0).certainty(Certainty::inconclusive).debugwarnings(options.debugwarnings).platform(options.type).build();
+
+        if (options.preprocess) {
+            SimpleTokenizer2 tokenizer(settings, *this, code, "test.cpp");
+
             ASSERT_LOC(tokenizer.simplifyTokens1(""), file, line);
             return tokenizer.tokens()->stringifyList(nullptr);
         }
@@ -226,7 +234,7 @@ private:
         const char expected[] =
             "void f ( ) "
             "{ "
-            "struct yy_buffer_state * state ; "
+            "yy_buffer_state * state ; "
             "}";
 
         ASSERT_EQUALS(expected, tok(code));
@@ -306,13 +314,13 @@ private:
             "struct t { int a ; } ; "
             "struct U { int a ; } ; "
             "struct Unnamed0 { int a ; } ; "
-            "struct s s ; "
-            "struct s * ps ; "
-            "struct t t ; "
-            "struct t * tp ; "
-            "struct U u ; "
-            "struct U * v ; "
-            "struct Unnamed0 * w ;";
+            "s s ; "
+            "s * ps ; "
+            "t t ; "
+            "t * tp ; "
+            "U u ; "
+            "U * v ; "
+            "Unnamed0 * w ;";
 
         ASSERT_EQUALS(expected, tok(code));
     }
@@ -337,13 +345,13 @@ private:
             "union t { int a ; float b ; } ; "
             "union U { int a ; float b ; } ; "
             "union Unnamed0 { int a ; float b ; } ; "
-            "union s s ; "
-            "union s * ps ; "
-            "union t t ; "
-            "union t * tp ; "
-            "union U u ; "
-            "union U * v ; "
-            "union Unnamed0 * w ;";
+            "s s ; "
+            "s * ps ; "
+            "t t ; "
+            "t * tp ; "
+            "U u ; "
+            "U * v ; "
+            "Unnamed0 * w ;";
 
         ASSERT_EQUALS(expected, tok(code));
     }
@@ -356,8 +364,8 @@ private:
 
         const char expected[] = "enum abc { a = 0 , b = 1 , c = 2 } ; "
                                 "enum xyz { x = 0 , y = 1 , z = 2 } ; "
-                                "enum abc e1 ; "
-                                "enum xyz e2 ;";
+                                "abc e1 ; "
+                                "xyz e2 ;";
 
         ASSERT_EQUALS(expected, tok(code));
     }
@@ -408,7 +416,7 @@ private:
                             "    FP_M(val);"
                             "};";
 
-        TODO_ASSERT_THROW(tok(code, Platform::Type::Native, false), InternalError); // TODO: Do not throw AST validation exception
+        TODO_ASSERT_THROW(tok(code, dinit(TokOptions, $.debugwarnings = false)), InternalError); // TODO: Do not throw AST validation exception
         //ASSERT_EQUALS("", errout_str());
     }
 
@@ -443,7 +451,7 @@ private:
         const char expected[] = "struct STRFOO { "
                                 "char freem [ 4096 ] ; "
                                 "} ; "
-                                "struct STRFOO s ;";
+                                "STRFOO s ;";
 
         ASSERT_EQUALS(expected, tok(code));
         ASSERT_EQUALS("", errout_str());
@@ -465,17 +473,17 @@ private:
                                 "class S2 : public C1 { } ; "
                                 "class S3 { } ; "
                                 "class S4 : public C1 { } ; "
-                                "class S1 s1 ; "
-                                "class S2 s2 ; "
-                                "class S3 s3 ; "
-                                "class S4 s4 ;";
+                                "S1 s1 ; "
+                                "S2 s2 ; "
+                                "S3 s3 ; "
+                                "S4 s4 ;";
 
         ASSERT_EQUALS(expected, tok(code));
     }
 
     void simplifyUsing18() {
         const char code[] = "{ { { using a = a; using a; } } }";
-        tok(code); // don't crash
+        (void)tok(code); // don't crash
     }
 
     void simplifyUsing19() {
@@ -487,7 +495,7 @@ private:
                             "   using b = float;\n"
                             "}\n"
                             "}";
-        tok(code); // don't hang
+        (void)tok(code); // don't hang
         ignore_errout(); // we are not interested in the output
     }
 
@@ -532,14 +540,14 @@ private:
                             "   return nullptr;\n"
                             "}\n"
                             "}}}}}}}";
-        tok(code); // don't hang
+        (void)tok(code); // don't hang
         ignore_errout(); // we do not care about the output
     }
 
     void simplifyUsing21() {
         const char code[] = "using a = b;\n"
                             "enum {}";
-        tok(code); // don't crash
+        (void)tok(code); // don't crash
     }
 
     void simplifyUsing22() {
@@ -675,7 +683,7 @@ private:
                             "    T* p{ new T };\n"
                             "}\n";
         const char expected[] = "void f ( ) { int * p { new int } ; }";
-        ASSERT_EQUALS(expected, tok(code, Platform::Type::Native, /*debugwarnings*/ true));
+        ASSERT_EQUALS(expected, tok(code));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -683,7 +691,7 @@ private:
         const char code[] = "using T = int*;\n"
                             "void f(T = T()) {}\n";
         const char expected[] = "void f ( int * = ( int * ) 0 ) { }";
-        ASSERT_EQUALS(expected, tok(code, Platform::Type::Native, /*debugwarnings*/ true));
+        ASSERT_EQUALS(expected, tok(code));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -694,20 +702,20 @@ private:
                                 "    std::string str = to_string(1);\n"
                                 "}\n";
             const char expected[] = "void f ( ) { std :: string str ; str = std :: to_string ( 1 ) ; }";
-            ASSERT_EQUALS(expected, tok(code, Platform::Type::Native, /*debugwarnings*/ true));
+            ASSERT_EQUALS(expected, tok(code));
             ASSERT_EQUALS("", errout_str());
         }
         {
             const char code[] = "using std::cout, std::endl, std::cerr, std::ostringstream;\n"
                                 "cerr << \"abc\";\n";
             const char expected[] = "std :: cerr << \"abc\" ;";
-            ASSERT_EQUALS(expected, tok(code, Platform::Type::Native, /*debugwarnings*/ true));
+            ASSERT_EQUALS(expected, tok(code));
             ASSERT_EQUALS("", errout_str());
         }
         {
             const char code[] = "using std::string_view_literals::operator\"\"sv;\n";
             const char expected[] = "using std :: string_view_literals :: operator\"\"sv ;";
-            ASSERT_EQUALS(expected, tok(code, Platform::Type::Native, /*debugwarnings*/ true));
+            ASSERT_EQUALS(expected, tok(code));
             ASSERT_EQUALS("", errout_str());
         }
         {
@@ -725,7 +733,7 @@ private:
                                     "using vector<int> = :: std :: vector<int> :: vector<int> ; "
                                     "vector<int> ( ) { } "
                                     "} ;";
-            ASSERT_EQUALS(expected, tok(code, Platform::Type::Native, /*debugwarnings*/ true));
+            ASSERT_EQUALS(expected, tok(code));
             ASSERT_EQUALS("", errout_str());
         }
         {
@@ -737,8 +745,10 @@ private:
                                     "void f ( const char * c ) { "
                                     "cout << std :: string ( c ) << \"abc\" ; "
                                     "}";
-            ASSERT_EQUALS(expected, tok(code, Platform::Type::Native, /*debugwarnings*/ true));
-            ASSERT_EQUALS("[test.cpp:3]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable cout\n", errout_str());
+            ASSERT_EQUALS(expected, tok(code));
+            ASSERT_EQUALS(
+                "[test.cpp:3]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable cout\n",
+                errout_str());
         }
         {
             const char code[] = "class T : private std::vector<std::pair<std::string, const int*>> {\n" // #12521
@@ -747,9 +757,119 @@ private:
             const char expected[] = "class T : private std :: vector < std :: pair < std :: string , const int * > > { "
                                     "using empty = std :: vector < std :: pair < std :: string , const int * > > :: empty ; "
                                     "} ;";
-            ASSERT_EQUALS(expected, tok(code, Platform::Type::Native, /*debugwarnings*/ true));
+            ASSERT_EQUALS(expected, tok(code));
             ASSERT_EQUALS("", errout_str());
         }
+    }
+
+    void simplifyUsing31() { // #11899
+        const char code[] = "struct B {\n"
+                            "    B();\n"
+                            "    void f();\n"
+                            "};\n"
+                            "struct D : B {\n"
+                            "    using B::B;\n"
+                            "    void g() {\n"
+                            "        B::f();\n"
+                            "    }\n"
+                            "    B b;\n"
+                            "};\n";
+        const char expected[] = "struct B { "
+                                "B ( ) ; "
+                                "void f ( ) ; "
+                                "} ; "
+                                "struct D : B { "
+                                "using B = B :: B ; "
+                                "void g ( ) { "
+                                "B :: f ( ) ; "
+                                "} "
+                                "B b ; "
+                                "} ;";
+        ASSERT_EQUALS(expected, tok(code));
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void simplifyUsing32() {
+        const char code[] = "using T = int*;\n" // #11430
+                            "T f() { return T{}; }\n"
+                            "T g() { return T(malloc(4)); }\n";
+        const char expected[] = "int * f ( ) { return ( int * ) 0 ; } "
+                                "int * g ( ) { return ( int * ) ( malloc ( 4 ) ) ; }";
+        ASSERT_EQUALS(expected, tok(code));
+        ASSERT_EQUALS("", errout_str());
+
+        const char code2[] = "struct S {\n" // #13095
+                             "    using reference_type = int&;\n"
+                             "    reference_type get();\n"
+                             "    int i;\n"
+                             "};\n"
+                             "auto S::get() -> reference_type {\n"
+                             "    return i;\n"
+                             "}\n";
+        const char expected2[] = "struct S { "
+                                 "int & get ( ) ; "
+                                 "int i ; "
+                                 "} ; "
+                                 "auto S :: get ( ) . int & { return i ; }";
+        ASSERT_EQUALS(expected2, tok(code2));
+        TODO_ASSERT_EQUALS("",
+                           "[test.cpp:6]: (debug) auto token with no type.\n"
+                           "", errout_str());
+
+        const char code3[] = "using V = int*;\n"
+                             "auto g() -> const volatile V { return {}; }\n";
+        const char expected3[] = "auto g ( ) . const volatile int * { return { } ; }";
+        ASSERT_EQUALS(expected3, tok(code3));
+        TODO_ASSERT_EQUALS("",
+                           "[test.cpp:2]: (debug) auto token with no type.\n"
+                           "", errout_str());
+    }
+
+    void simplifyUsing33() { // #13090
+        const char code[] = "namespace N {\n"
+                            "    using T = int;\n"
+                            "    T f() { return (T)0; }\n"
+                            "}\n"
+                            "struct S {\n"
+                            "    using U = int;\n"
+                            "    U g() { return (U)0; }\n"
+                            "};\n";
+        const char expected[] = "namespace N { "
+                                "int f ( ) { return ( int ) 0 ; } "
+                                "} "
+                                "struct S { "
+                                "int g ( ) { return ( int ) 0 ; } "
+                                "} ;";
+        ASSERT_EQUALS(expected, tok(code));
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void simplifyUsing34() { // #13295
+        const char code[] = "struct A {\n"
+                            "    static const int a = 1;\n"
+                            "};\n"
+                            "using B = struct A;\n"
+                            "void g(int);\n"
+                            "void f() {\n"
+                            "    g({ B::a });\n"
+                            "}\n";
+        const char expected[] = "struct A { "
+                                "static const int a = 1 ; "
+                                "} ; "
+                                "void g ( int ) ; "
+                                "void f ( ) { "
+                                "g ( { A :: a } ) ; "
+                                "}";
+        ASSERT_EQUALS(expected, tok(code));
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void simplifyUsing35() { // #13492
+        const char code[] = "using a = b;\n"
+                            "using c = d;\n";
+        const char expected[] = ";";
+        ASSERT_EQUALS(expected, tok(code));
+        ASSERT_EQUALS("", errout_str());
     }
 
     void simplifyUsing8970() {
@@ -802,11 +922,11 @@ private:
 
         const char exp[] = "int i ;";
 
-        ASSERT_EQUALS(exp, tok(code, Platform::Type::Unix32));
-        ASSERT_EQUALS(exp, tok(code, Platform::Type::Unix64));
-        ASSERT_EQUALS(exp, tok(code, Platform::Type::Win32A));
-        ASSERT_EQUALS(exp, tok(code, Platform::Type::Win32W));
-        ASSERT_EQUALS(exp, tok(code, Platform::Type::Win64));
+        ASSERT_EQUALS(exp, tok(code, dinit(TokOptions, $.type = Platform::Unix32)));
+        ASSERT_EQUALS(exp, tok(code, dinit(TokOptions, $.type = Platform::Unix64)));
+        ASSERT_EQUALS(exp, tok(code, dinit(TokOptions, $.type = Platform::Win32A)));
+        ASSERT_EQUALS(exp, tok(code, dinit(TokOptions, $.type = Platform::Win32W)));
+        ASSERT_EQUALS(exp, tok(code, dinit(TokOptions, $.type = Platform::Win64)));
     }
 
     void simplifyUsing9042() {
@@ -826,7 +946,7 @@ private:
                            "} ; "
                            "template < class T > class s { } ;";
 
-        ASSERT_EQUALS(exp, tok(code, Platform::Type::Win64));
+        ASSERT_EQUALS(exp, tok(code, dinit(TokOptions, $.type = Platform::Win64)));
     }
 
     void simplifyUsing9191() {
@@ -854,9 +974,7 @@ private:
                            "}";
 
         ASSERT_EQUALS(exp, tok(code));
-        ASSERT_EQUALS("[test.cpp:7]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable NS1\n"
-                      "[test.cpp:11]: (debug) valueFlowConditionExpressions bailout: Skipping function due to incomplete variable NS2\n",
-                      errout_str());
+        ASSERT_EQUALS("", errout_str());
     }
 
     void simplifyUsing9381() {
@@ -1299,7 +1417,7 @@ private:
                                 "   auto ret = foo::ResultCodes_e::NO_ERROR;\n"
                                 "   return ret;\n"
                                 "}";
-            tok(code); // don't crash
+            (void)tok(code); // don't crash
             ignore_errout(); // we do not care about the output
         }
     }
@@ -1457,15 +1575,15 @@ private:
         ASSERT_EQUALS(exp, tok(code));
     }
 
-    void simplifyUsing10720() {
+    void simplifyUsing10720() { // hang/segmentation fault
         const char code[] = "template <typename... Ts>\n"
                             "struct S {};\n"
                             "#define STAMP(thiz, prev) using thiz = S<prev, prev, prev, prev, prev, prev, prev, prev, prev, prev>;\n"
                             "STAMP(A, int);\n"
                             "STAMP(B, A);\n"
                             "STAMP(C, B);\n";
-        tok(code, Platform::Type::Native, /*debugwarnings*/ true, /*preprocess*/ true);
-        ASSERT(startsWith(errout_str(), "[test.cpp:6]: (debug) Failed to parse 'using C = S < S < S < int"));
+        (void)tok(code, dinit(TokOptions, $.preprocess = true));
+        TODO_ASSERT(startsWith(errout_str(), "[test.cpp:6]: (debug) Failed to parse 'using C = S < S < S < int"));
     }
 
     void scopeInfo1() {
@@ -1475,7 +1593,7 @@ private:
                             "\n"
                             "namespace spdlog { class logger; }\n"
                             "using LoggerPtr = std::shared_ptr<spdlog::logger>;";
-        tok(code);
+        (void)tok(code);
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -1487,7 +1605,7 @@ private:
                             "\n"
                             "static void getInitialProgramState(const A::Map& vars = A::Map {})\n"
                             "{}\n";
-        tok(code);
+        (void)tok(code);
         ASSERT_EQUALS("", errout_str());
     }
 };

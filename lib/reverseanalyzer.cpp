@@ -48,10 +48,10 @@ namespace {
         std::pair<bool, bool> evalCond(const Token* tok) const {
             std::vector<MathLib::bigint> result = analyzer->evaluate(tok);
             // TODO: We should convert to bool
-            const bool checkThen = std::any_of(result.cbegin(), result.cend(), [](int x) {
+            const bool checkThen = std::any_of(result.cbegin(), result.cend(), [](MathLib::bigint x) {
                 return x == 1;
             });
-            const bool checkElse = std::any_of(result.cbegin(), result.cend(), [](int x) {
+            const bool checkElse = std::any_of(result.cbegin(), result.cend(), [](MathLib::bigint x) {
                 return x == 0;
             });
             return std::make_pair(checkThen, checkElse);
@@ -104,6 +104,17 @@ namespace {
             while ((parent = getParentFunction(parent)))
                 top = parent;
             return top;
+        }
+
+        static Token* jumpToStart(Token* tok)
+        {
+            if (Token::simpleMatch(tok->tokAt(-2), "} else {"))
+                tok = tok->linkAt(-2);
+            if (Token::simpleMatch(tok->previous(), ") {"))
+                return tok->linkAt(-1);
+            if (Token::simpleMatch(tok->previous(), "do {"))
+                return tok->previous();
+            return tok;
         }
 
         bool updateRecursive(Token* start) {
@@ -192,8 +203,8 @@ namespace {
                 if (tok->index() >= i)
                     throw InternalError(tok, "Cyclic reverse analysis.");
                 i = tok->index();
-                if (tok == start || (tok->str() == "{" && (tok->scope()->type == Scope::ScopeType::eFunction ||
-                                                           tok->scope()->type == Scope::ScopeType::eLambda))) {
+                if (tok == start || (tok->str() == "{" && (tok->scope()->type == ScopeType::eFunction ||
+                                                           tok->scope()->type == ScopeType::eLambda))) {
                     const Function* f = tok->scope()->function;
                     if (f && f->isConstructor()) {
                         if (const Token* initList = f->constructorMemberInitialization())
@@ -284,7 +295,7 @@ namespace {
                     if (!condTok)
                         break;
                     Analyzer::Action condAction = analyzeRecursive(condTok);
-                    const bool inLoop = condTok->astTop() && Token::Match(condTok->astTop()->previous(), "for|while (");
+                    const bool inLoop = Token::Match(condTok->astTop()->previous(), "for|while (");
                     // Evaluate condition of for and while loops first
                     if (inLoop) {
                         if (Token::findmatch(tok->link(), "goto|break", tok))
@@ -326,7 +337,7 @@ namespace {
                     // If the condition modifies the variable then bail
                     if (condAction.isModified())
                         break;
-                    tok = condTok->astTop()->previous();
+                    tok = jumpToStart(tok->link());
                     continue;
                 }
                 if (tok->str() == "{") {
@@ -343,10 +354,7 @@ namespace {
                         if (r.action.isModified())
                             break;
                     }
-                    if (Token::simpleMatch(tok->tokAt(-2), "} else {"))
-                        tok = tok->linkAt(-2);
-                    if (Token::simpleMatch(tok->previous(), ") {"))
-                        tok = tok->previous()->link();
+                    tok = jumpToStart(tok);
                     continue;
                 }
                 if (Token* next = isUnevaluated(tok)) {
@@ -359,9 +367,9 @@ namespace {
                 }
                 if (tok->str() == "case") {
                     const Scope* scope = tok->scope();
-                    while (scope && scope->type != Scope::eSwitch)
+                    while (scope && scope->type != ScopeType::eSwitch)
                         scope = scope->nestedIn;
-                    if (!scope || scope->type != Scope::eSwitch)
+                    if (!scope || scope->type != ScopeType::eSwitch)
                         break;
                     tok = tok->tokAt(scope->bodyStart->index() - tok->index() - 1);
                     continue;

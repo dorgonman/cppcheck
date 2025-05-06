@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,8 +20,8 @@
 #include "fixture.h"
 #include "helpers.h"
 #include "settings.h"
-#include "tokenize.h"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -30,33 +30,10 @@ public:
     TestLeakAutoVar() : TestFixture("TestLeakAutoVar") {}
 
 private:
-    Settings settings;
+    const Settings settings = settingsBuilder().library("std.cfg").build();
 
     void run() override {
-        constexpr char xmldata[] = "<?xml version=\"1.0\"?>\n"
-                                   "<def>\n"
-                                   "  <podtype name=\"uint8_t\" sign=\"u\" size=\"1\"/>\n"
-                                   "  <memory>\n"
-                                   "    <alloc>malloc</alloc>\n"
-                                   "    <realloc>realloc</realloc>\n"
-                                   "    <dealloc>free</dealloc>\n"
-                                   "  </memory>\n"
-                                   "  <resource>\n"
-                                   "    <alloc>socket</alloc>\n"
-                                   "    <dealloc>close</dealloc>\n"
-                                   "  </resource>\n"
-                                   "  <resource>\n"
-                                   "    <alloc>fopen</alloc>\n"
-                                   "    <realloc realloc-arg=\"3\">freopen</realloc>\n"
-                                   "    <dealloc>fclose</dealloc>\n"
-                                   "  </resource>\n"
-                                   "  <smart-pointer class-name=\"std::shared_ptr\"/>\n"
-                                   "  <smart-pointer class-name=\"std::unique_ptr\">\n"
-                                   "    <unique/>\n"
-                                   "  </smart-pointer>\n"
-                                   "</def>";
-        settings = settingsBuilder(settings).libraryxml(xmldata, sizeof(xmldata)).build();
-
+        // TODO: mNewTemplate = true;
         // Assign
         TEST_CASE(assign1);
         TEST_CASE(assign2);
@@ -83,6 +60,10 @@ private:
         TEST_CASE(assign23);
         TEST_CASE(assign24); // #7440
         TEST_CASE(assign25);
+        TEST_CASE(assign26);
+
+        TEST_CASE(memcpy1); // #11542
+        TEST_CASE(memcpy2);
 
         TEST_CASE(isAutoDealloc);
 
@@ -108,6 +89,7 @@ private:
         TEST_CASE(deallocuse13);
         TEST_CASE(deallocuse14);
         TEST_CASE(deallocuse15);
+        TEST_CASE(deallocuse16); // #8109: delete with comma operator
 
         TEST_CASE(doublefree1);
         TEST_CASE(doublefree2);
@@ -125,11 +107,13 @@ private:
         TEST_CASE(doublefree14); // #9708
         TEST_CASE(doublefree15);
         TEST_CASE(doublefree16);
+        TEST_CASE(doublefree17); // #8109: delete with comma operator
 
         // exit
         TEST_CASE(exit1);
         TEST_CASE(exit2);
         TEST_CASE(exit3);
+        TEST_CASE(exit4);
 
         // handling function calls
         TEST_CASE(functioncall1);
@@ -168,6 +152,7 @@ private:
         TEST_CASE(ifelse26);
         TEST_CASE(ifelse27);
         TEST_CASE(ifelse28); // #11038
+        TEST_CASE(ifelse29);
 
         // switch
         TEST_CASE(switch1);
@@ -193,6 +178,7 @@ private:
         TEST_CASE(return8);
         TEST_CASE(return9);
         TEST_CASE(return10);
+        TEST_CASE(return11); // #13098
 
         // General tests: variable type, allocation type, etc
         TEST_CASE(test1);
@@ -226,19 +212,28 @@ private:
         TEST_CASE(functionCallLeakIgnoreConfig); // #7923
     }
 
+    struct CheckOptions
+    {
+        CheckOptions() = default;
+        bool cpp = false;
+        const Settings *s = nullptr;
+    };
+
 #define check(...) check_(__FILE__, __LINE__, __VA_ARGS__)
-    void check_(const char* file, int line, const char code[], bool cpp = false, const Settings *s = nullptr) {
-        const Settings settings1 = settingsBuilder(s ? *s : settings).checkLibrary().build();
+    template<size_t size>
+    void check_(const char* file, int line, const char (&code)[size], const CheckOptions& options = make_default_obj()) {
+        const Settings settings1 = settingsBuilder(options.s ? *options.s : settings).checkLibrary().build();
 
         // Tokenize..
-        SimpleTokenizer tokenizer(settings1, *this);
-        ASSERT_LOC(tokenizer.tokenize(code, cpp), file, line);
+        SimpleTokenizer tokenizer(settings1, *this, options.cpp);
+        ASSERT_LOC(tokenizer.tokenize(code), file, line);
 
         // Check for leaks..
         runChecks<CheckLeakAutoVar>(tokenizer, this);
     }
 
-    void check_(const char* file, int line, const char code[], const Settings & s) {
+    template<size_t size>
+    void check_(const char* file, int line, const char (&code)[size], const Settings & s) {
         const Settings settings0 = settingsBuilder(s).checkLibrary().build();
 
         // Tokenize..
@@ -362,7 +357,7 @@ private:
               "    char * &ref = p;\n"
               "    p = malloc(10);\n"
               "    free(ref);\n"
-              "}", /*cpp*/ true);
+              "}", dinit(CheckOptions, $.cpp = true));
         TODO_ASSERT_EQUALS("", "[test.cpp:6]: (error) Memory leak: p\n", errout_str());
     }
 
@@ -376,7 +371,7 @@ private:
         check("void f(int x) {\n"
               "    char *p;\n"
               "    if (x && (p = new char[10])) { }"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3]: (error) Memory leak: p\n", errout_str());
     }
 
@@ -438,7 +433,7 @@ private:
     void assign20() { // #9187
         check("void f() {\n"
               "    char *p = static_cast<int>(malloc(10));\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3]: (error) Memory leak: p\n", errout_str());
     }
 
@@ -446,26 +441,27 @@ private:
         check("void f(int **x) {\n" // #10186
               "    void *p = malloc(10);\n"
               "    *x = (int*)p;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("struct S { int i; };\n" // #10996
               "void f() {\n"
               "    S* s = new S();\n"
               "    (void)s;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:5]: (error) Memory leak: s\n", errout_str());
     }
 
     void assign22() { // #9139
+        const Settings s = settingsBuilder().library("posix.cfg").build();
         check("void f(char tempFileName[256]) {\n"
               "    const int fd = socket(AF_INET, SOCK_PACKET, 0 );\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true, $.s = &s));
         ASSERT_EQUALS("[test.cpp:3]: (error) Resource leak: fd\n", errout_str());
 
         check("void f() {\n"
               "    const void * const p = malloc(10);\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3]: (error) Memory leak: p\n", errout_str());
     }
 
@@ -487,7 +483,7 @@ private:
               "    ((*&n12)) = open(\"xx.log\", O_RDONLY);\n"
               "    *(&(*&n13)) = open(\"xx.log\", O_RDONLY);\n"
               "    ((*&(*&n14))) = open(\"xx.log\", O_RDONLY);\n"
-              "}\n", true, &s);
+              "}\n", dinit(CheckOptions, $.cpp = true, $.s = &s));
         ASSERT_EQUALS("[test.cpp:17]: (error) Resource leak: n1\n"
                       "[test.cpp:17]: (error) Resource leak: n2\n"
                       "[test.cpp:17]: (error) Resource leak: n3\n"
@@ -510,7 +506,7 @@ private:
               "    char* data = new char[100];\n"
               "    char** dataPtr = &data;\n"
               "    delete[] *dataPtr;\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n"
@@ -518,14 +514,14 @@ private:
               "    char** dataPtr = &data;\n"
               "    printf(\"test\");\n"
               "    delete[] *dataPtr;\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n" // #9279
               "    int* p = new int;\n"
               "    *p = 42;\n"
               "    g();\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:4]: (information) --check-library: Function g() should have <noreturn> configuration\n",
                       errout_str());
 
@@ -534,7 +530,7 @@ private:
               "    int* p = new int;\n"
               "    *p = 42;\n"
               "    g();\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:6]: (error) Memory leak: p\n", errout_str());
 
         check("void g() {}\n"
@@ -542,7 +538,7 @@ private:
               "    int* p = new int;\n"
               "    *p = 42;\n"
               "    g();\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:6]: (error) Memory leak: p\n", errout_str());
 
         check("[[noreturn]] void g();\n"
@@ -550,7 +546,7 @@ private:
               "    int* p = new int;\n"
               "    *p = 42;\n"
               "    g();\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void g() { exit(1); }\n"
@@ -558,7 +554,7 @@ private:
               "    int* p = new int;\n"
               "    *p = 42;\n"
               "    g();\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void g() {}\n" // #10517
@@ -573,7 +569,7 @@ private:
         check("void f() {\n" // #11796
               "    int* p{ new int };\n"
               "    int* q(new int);\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:4]: (error) Memory leak: p\n"
                       "[test.cpp:4]: (error) Memory leak: q\n",
                       errout_str());
@@ -589,7 +585,7 @@ private:
               "void S::g() {\n"
               "    FD* fd{ new FD(this) };\n"
               "    fd->exec();\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("struct C {\n" // #12327
@@ -616,25 +612,70 @@ private:
               "    C c(p);\n"
               "    li.push_back(c);\n"
               "    delete[] li.front().m_p;\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
+
+        check("struct S {\n" // #12890
+              "    int** p;\n"
+              "    S() {\n"
+              "        p = std::malloc(sizeof(int*));\n"
+              "        p[0] = new int;\n"
+              "    }\n"
+              "    ~S() {\n"
+              "        delete p[0];\n"
+              "        std::free(p);\n"
+              "    }\n"
+              "};\n", dinit(CheckOptions, $.cpp = true));
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void assign26() {
+        check("void f(int*& x) {\n" // #8235
+              "    int* p = (int*)malloc(10);\n"
+              "    x = p ? p : nullptr;\n"
+              "}", dinit(CheckOptions, $.cpp = true));
+        ASSERT_EQUALS("", errout_str());
+
+        check("void f(int*& x) {\n"
+              "    int* p = (int*)malloc(10);\n"
+              "    x = p != nullptr ? p : nullptr;\n"
+              "}", dinit(CheckOptions, $.cpp = true));
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void memcpy1() { // #11542
+        const Settings s = settingsBuilder().library("std.cfg").build();
+        check("void f(char** old, char* value) {\n"
+              "    char *str = strdup(value);\n"
+              "    memcpy(old, &str, sizeof(char*));\n"
+              "}\n", dinit(CheckOptions, $.s = &s));
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void memcpy2() {
+        const Settings s = settingsBuilder().library("std.cfg").build();
+        check("void f(char* old, char* value, size_t len) {\n"
+              "    char *str = strdup(value);\n"
+              "    memcpy(old, str, len);\n"
+              "}\n", dinit(CheckOptions, $.cpp = true, $.s = &s));
+        ASSERT_EQUALS("[test.cpp:4]: (error) Memory leak: str\n", errout_str());
     }
 
     void isAutoDealloc() {
         check("void f() {\n"
               "    char *p = new char[100];"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:2]: (error) Memory leak: p\n", errout_str());
 
         check("void f() {\n"
               "    Fred *fred = new Fred;"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n"
               "    std::string *str = new std::string;"
-              "}", true);
-        TODO_ASSERT_EQUALS("[test.cpp:2]: (error) Memory leak: str\n", "", errout_str());
+              "}", dinit(CheckOptions, $.cpp = true));
+        ASSERT_EQUALS("[test.cpp:2]: (error) Memory leak: str\n", errout_str());
 
         check("class TestType {\n" // #9028
               "public:\n"
@@ -642,13 +683,13 @@ private:
               "};\n"
               "void f() {\n"
               "    TestType *tt = new TestType();\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:7]: (error) Memory leak: tt\n", errout_str());
 
         check("void f(Bar& b) {\n" // #7622
               "    char* data = new char[10];\n"
               "    b = Bar(*new Foo(data));\n"
-              "}", /*cpp*/ true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:4]: (information) --check-library: Function Foo() should have <use>/<leak-ignore> configuration\n", errout_str());
 
         check("class B {};\n"
@@ -656,7 +697,7 @@ private:
               "    void g() {\n"
               "        auto d = new D();\n"
               "        if (d) {}\n"
-              "}", /*cpp*/ true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:6]: (error) Memory leak: d\n", errout_str());
 
         check("struct S {\n" // #12354
@@ -667,7 +708,7 @@ private:
               "    if (b)\n"
               "        p = new S();\n"
               "    p->f();\n"
-              "}", /*cpp*/ true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:9]: (error) Memory leak: p\n", errout_str());
     }
 
@@ -785,13 +826,13 @@ private:
         check("void f(char *p) {\n"
               "  if (!p) delete p;\n"
               "  return p;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f(char *p) {\n"
               "  if (!p) delete [] p;\n"
               "  return p;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f(void* p) {\n"
@@ -826,14 +867,14 @@ private:
               "void f(Foo* foo) {\n"
               "    delete foo->ptr;\n"
               "    foo->ptr = new Foo;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("struct Foo { int* ptr; };\n"
               "void f(Foo* foo) {\n"
               "    delete foo->ptr;\n"
               "    x = *foo->ptr;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         TODO_ASSERT_EQUALS("[test.cpp:4]: (error) Dereferencing 'ptr' after it is deallocated / released\n", "", errout_str());
 
         check("void parse() {\n"
@@ -842,7 +883,7 @@ private:
               "        ~Buf() { delete[]m_buf; }\n"
               "        uint8_t *m_buf;\n"
               "    };\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("struct Foo {\n"
@@ -854,7 +895,7 @@ private:
               "    delete foo->ptr;\n"
               "    foo->ptr = new Foo;\n"
               "    foo->ptr->func();\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void foo(void (*conv)(char**)) {\n"
@@ -870,7 +911,7 @@ private:
               "    int *ptr = new int;\n"
               "    delete(ptr);\n"
               "    *ptr = 0;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:4]: (error) Dereferencing 'ptr' after it is deallocated / released\n", errout_str());
     }
 
@@ -879,7 +920,7 @@ private:
               "  std::shared_ptr<Type> sp(p);\n"
               "  bool b = p->foo();\n"
               "  return b;\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("struct A {\n" // #8635
@@ -889,7 +930,7 @@ private:
               "        array_.push_back(std::unique_ptr<A>(a));\n"
               "        return a;\n"
               "    }\n"
-              "};\n", /*cpp*/ true);
+              "};\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("int g(int *p) {\n" // #9838
@@ -898,7 +939,7 @@ private:
               "}\n"
               "int f() {\n"
               "    return g(new int(3));\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -921,7 +962,7 @@ private:
               "  int *array = new int[42];\n"
               "  delete [] array;\n"
               "  return array[1];" // <<
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3] -> [test.cpp:4]: (error) Returning/dereferencing 'array' after it is deallocated / released\n", errout_str());
 
         check("int f() {\n"
@@ -951,7 +992,7 @@ private:
               "    auto* b = static_cast<int*>(malloc(8));\n"
               "    free(b);\n"
               "    b[1] = 0;\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:4]: (error) Dereferencing 'a' after it is deallocated / released\n"
                       "[test.cpp:7]: (error) Dereferencing 'b' after it is deallocated / released\n",
                       errout_str());
@@ -963,7 +1004,7 @@ private:
               "    S* s = new S;\n"
               "    delete s;\n"
               "    s->f();\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:5]: (error) Dereferencing 's' after it is deallocated / released\n",
                       errout_str());
 
@@ -1030,7 +1071,7 @@ private:
               "        free(p);\n"
               "    }, 1);\n"
               "    return 0;\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -1047,8 +1088,27 @@ private:
               "    if (fd == nullptr)\n"
               "        return false;\n"
               "    return fclose(fd) == 0;\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
+
+        check("int f(const char* fileName) {\n" // #13136
+              "    FILE* h = fopen(fileName, \"rb\");\n"
+              "    if (fseek(h, 0L, SEEK_END) == -1)\n"
+              "        fclose(h);\n"
+              "    int i = ftell(h);\n"
+              "    return i;\n"
+              "}\n");
+        ASSERT_EQUALS("[test.c:5]: (error) Dereferencing 'h' after it is deallocated / released\n", errout_str());
+    }
+
+    void deallocuse16() {
+        check("void f() {\n"
+              "    int *a = nullptr;\n"
+              "    int *c = new int;\n"
+              "    delete (a, c);\n"
+              "    *c = 10;\n"
+              "}\n", dinit(CheckOptions, $.cpp = true));
+        ASSERT_EQUALS("[test.cpp:5]: (error) Dereferencing 'c' after it is deallocated / released\n", errout_str());
     }
 
     void doublefree1() {  // #3895
@@ -1111,7 +1171,9 @@ private:
             "  printf(\"Freed memory at location %x\", p);\n"
             "  free(p);\n"
             "}");
-        ASSERT_EQUALS("[test.c:2] -> [test.c:4]: (error) Memory pointed to by 'p' is freed twice.\n", errout_str());
+        ASSERT_EQUALS("[test.c:3]: (error) Dereferencing 'p' after it is deallocated / released\n"
+                      "[test.c:2] -> [test.c:4]: (error) Memory pointed to by 'p' is freed twice.\n",
+                      errout_str());
 
         check(
             "void foo(FILE *p) {\n"
@@ -1192,28 +1254,28 @@ private:
             "void foo(char *p) {\n"
             "  delete p;\n"
             "  delete p;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:3]: (error) Memory pointed to by 'p' is freed twice.\n", errout_str());
 
         check(
             "void foo(char *p, char *r) {\n"
             "  delete p;\n"
             "  delete r;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check(
             "void foo(P p) {\n"
             "  delete p.x;\n"
             "  delete p;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check(
             "void foo(char **p) {\n"
             "  delete p[0];\n"
             "  delete p[1];\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check(
@@ -1221,7 +1283,7 @@ private:
             "  delete p;\n"
             "  getNext(&p);\n"
             "  delete p;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check(
@@ -1229,21 +1291,21 @@ private:
             "  delete p;\n"
             "  bar();\n"
             "  delete p;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:4]: (error) Memory pointed to by 'p' is freed twice.\n", errout_str());
 
         check(
             "void foo(char *p) {\n"
             "  delete[] p;\n"
             "  delete[] p;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:3]: (error) Memory pointed to by 'p' is freed twice.\n", errout_str());
 
         check(
             "void foo(char *p, char *r) {\n"
             "  delete[] p;\n"
             "  delete[] r;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check(
@@ -1251,7 +1313,7 @@ private:
             "  delete[] p;\n"
             "  getNext(&p);\n"
             "  delete[] p;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check(
@@ -1259,7 +1321,7 @@ private:
             "  delete[] p;\n"
             "  bar();\n"
             "  delete[] p;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:4]: (error) Memory pointed to by 'p' is freed twice.\n", errout_str());
 
         check(
@@ -1270,7 +1332,7 @@ private:
             "  delete pxpm;\n"
             "  pxpm = NULL;\n"
             "  return *this;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check(
@@ -1287,7 +1349,7 @@ private:
             "      throw;\n"
             "    }\n"
             "  delete ptr;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check(
@@ -1303,7 +1365,7 @@ private:
             "   if(doDelete)\n"
             "       delete a;\n"
             "   return 0;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         TODO_ASSERT_EQUALS("", "[test.cpp:8] -> [test.cpp:11]: (error) Memory pointed to by 'a' is freed twice.\n", errout_str());
 
         check(
@@ -1317,7 +1379,7 @@ private:
             "        delete[] x;\n"
             "    }\n"
             "    delete[] x;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check(
@@ -1329,7 +1391,7 @@ private:
             "        delete[] x;\n"
             "    }\n"
             "    delete[] x;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         TODO_ASSERT_EQUALS("[test.cpp:8]: (error) Memory pointed to by 'x' is freed twice.\n", "", errout_str());
 
         check(
@@ -1341,7 +1403,7 @@ private:
             "        delete[] x;\n"
             "    }\n"
             "    delete[] x;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         TODO_ASSERT_EQUALS("[test.cpp:8]: (error) Memory pointed to by 'x' is freed twice.\n", "", errout_str());
 
         check(
@@ -1367,7 +1429,7 @@ private:
             "        delete[] x;\n"
             "    }\n"
             "    delete[] x;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check(
@@ -1381,7 +1443,7 @@ private:
             "        delete[] x;\n"
             "    } while (true);\n"
             "    delete[] x;\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check(
@@ -1414,7 +1476,7 @@ private:
             "void MyThrow(err)\n"
             "{\n"
             "    throw(err);\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check(
@@ -1435,7 +1497,7 @@ private:
             "void MyExit(err)\n"
             "{\n"
             "    exit(err);\n"
-            "}", true);
+            "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check( // #6252
@@ -1450,7 +1512,7 @@ private:
             "        delete m_thing;\n"
             "        m_thing = new Thing;\n"
             "    }\n"
-            "};", true);
+            "};", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         // #7401
@@ -1524,7 +1586,7 @@ private:
         check("void do_wordexp(FILE *f) {\n"
               "  free(getword(f));\n"
               "  fclose(f);\n"
-              "}", /*cpp=*/ false);
+              "}");
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -1540,7 +1602,7 @@ private:
               "    delete[] p;\n"
               "    if (x && (p = new char[10]))\n"
               "        delete[] p;\n"
-              "}");
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -1549,35 +1611,35 @@ private:
               "    int * i = new int;\n"
               "    std::unique_ptr<int> x(i);\n"
               "    delete i;\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3] -> [test.cpp:4]: (error) Memory pointed to by 'i' is freed twice.\n", errout_str());
 
         check("void f() {\n"
               "    int * i = new int;\n"
               "    delete i;\n"
               "    std::unique_ptr<int> x(i);\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3] -> [test.cpp:4]: (error) Memory pointed to by 'i' is freed twice.\n", errout_str());
 
         check("void f() {\n"
               "    int * i = new int;\n"
               "    std::unique_ptr<int> x{i};\n"
               "    delete i;\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3] -> [test.cpp:4]: (error) Memory pointed to by 'i' is freed twice.\n", errout_str());
 
         check("void f() {\n"
               "    int * i = new int;\n"
               "    std::shared_ptr<int> x(i);\n"
               "    delete i;\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3] -> [test.cpp:4]: (error) Memory pointed to by 'i' is freed twice.\n", errout_str());
 
         check("void f() {\n"
               "    int * i = new int;\n"
               "    std::shared_ptr<int> x{i};\n"
               "    delete i;\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3] -> [test.cpp:4]: (error) Memory pointed to by 'i' is freed twice.\n", errout_str());
 
         // Check for use-after-free FP
@@ -1585,14 +1647,14 @@ private:
               "    int * i = new int;\n"
               "    std::shared_ptr<int> x{i};\n"
               "    *i = 123;\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n"
               "    int * i = new int[1];\n"
               "    std::unique_ptr<int[]> x(i);\n"
               "    delete i;\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3] -> [test.cpp:4]: (error) Memory pointed to by 'i' is freed twice.\n", errout_str());
 
         check("using namespace std;\n" // #9708
@@ -1600,7 +1662,7 @@ private:
               "    int* i = new int;\n"
               "    unique_ptr<int> x(i);\n"
               "    delete i;\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:4] -> [test.cpp:5]: (error) Memory pointed to by 'i' is freed twice.\n", errout_str());
     }
 
@@ -1611,7 +1673,7 @@ private:
               "void f(foo* b) {\n"
               "    std::unique_ptr<int> x(b->get(0));\n"
               "    std::unique_ptr<int> y(b->get(1));\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -1625,7 +1687,7 @@ private:
               "    }\n"
               "    if (p != NULL)\n"
               "        free(p);\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f(char* s) {\n"
@@ -1637,7 +1699,7 @@ private:
               "    }\n"
               "    if (p != NULL)\n"
               "        free(p);\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -1652,7 +1714,7 @@ private:
               "    free(p);\n"
               "    if (q == NULL)\n"
               "        return;\n"
-              "    free(q)\n"
+              "    free(q);\n"
               "}");
         ASSERT_EQUALS("[test.c:3] -> [test.c:8]: (error) Memory pointed to by 'p' is freed twice.\n", errout_str());
     }
@@ -1689,7 +1751,7 @@ private:
               "    int *i = new int;\n"
               "    unique_ptr<int> x(i);\n"
               "    delete i;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:6] -> [test.cpp:7]: (error) Memory pointed to by 'i' is freed twice.\n", errout_str());
 
         check("using namespace std;\n"
@@ -1698,14 +1760,14 @@ private:
               "{\n"
               "    int *i = new int;\n"
               "    unique_ptr<int> x(i);\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
     void doublefree15() { // #11966
         check("void f(FILE* fp) {\n"
               "    static_cast<void>(fclose(fp));\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -1726,6 +1788,17 @@ private:
               "    })) {}\n"
               "}\n");
         ASSERT_EQUALS("", errout_str());
+    }
+
+    void doublefree17() {
+        check("void f() {\n"
+              "    int *a = nullptr;\n"
+              "    int *b = nullptr;\n"
+              "    int *c = new int;\n"
+              "    delete (a, c);\n"
+              "    delete (b, c);\n"
+              "}\n", dinit(CheckOptions, $.cpp = true));
+        ASSERT_EQUALS("[test.cpp:5] -> [test.cpp:6]: (error) Memory pointed to by 'c' is freed twice.\n", errout_str());
     }
 
     void exit1() {
@@ -1753,7 +1826,7 @@ private:
               "    ::exit(0);\n"
               "  }"
               "  free(p);\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n"
@@ -1763,7 +1836,20 @@ private:
               "    std::exit(0);\n"
               "  }"
               "  free(p);\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void exit4() {
+        check("void __attribute__((__noreturn__)) (*func_notret)(void);\n"
+              "int main(int argc) {\n"
+              "    void* ptr = malloc(1000);\n"
+              "    if (argc == 1) {\n"
+              "        free(ptr);\n"
+              "        func_notret();\n"
+              "    }\n"
+              "    free(ptr);\n"
+              "}");
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -1789,13 +1875,13 @@ private:
               "        auto s = new S;\n"
               "        v.push_back(std::unique_ptr<S>(s));\n"
               "    }\n"
-              "}\n", /*cpp*/ true, &s);
+              "}\n", dinit(CheckOptions, $.cpp = true, $.s = &s));
         ASSERT_EQUALS("", errout_str()); // don't crash
 
         check("void g(size_t len) {\n" // #12365
               "    char* b = new char[len + 1]{};\n"
               "    std::string str = std::string(b);\n"
-              "}", /*cpp*/ true, &s);
+              "}", dinit(CheckOptions, $.cpp = true, $.s = &s));
         ASSERT_EQUALS("[test.cpp:4]: (error) Memory leak: b\n", errout_str());
     }
 
@@ -2028,7 +2114,7 @@ private:
               "void test_alloc() {\n"
               "   if ( global_ptr = new SSS()) {}\n"
               "   return;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("FILE* hFile;\n"
@@ -2263,6 +2349,18 @@ private:
         ASSERT_EQUALS("", errout_str());
     }
 
+    void ifelse29() { // #13296
+        check("struct S {\n"
+              "    typedef int (S::* func_t)(int) const;\n"
+              "    void f(func_t pfn);\n"
+              "    int g(int) const;\n"
+              "};\n"
+              "void S::f(func_t pfn) {\n"
+              "    if (pfn == (func_t)&S::g) {}\n"
+              "}\n", dinit(CheckOptions, $.cpp = true));
+        ASSERT_EQUALS("", errout_str()); // don't crash
+    }
+
     void switch1() {
         check("void f() {\n"
               "    char *p = 0;\n"
@@ -2333,30 +2431,30 @@ private:
               "    delete[] cPtr;\n"
               "    cPtr = new char[100];\n"
               "    delete cPtr;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:6] -> [test.cpp:7]: (error) Mismatching allocation and deallocation: cPtr\n", errout_str());
 
         check("void f() {\n"
               "    char *cPtr = new char[100];\n"
               "    free(cPtr);\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:3]: (error) Mismatching allocation and deallocation: cPtr\n", errout_str());
 
         check("void f() {\n"
               "    char *cPtr = new (buf) char[100];\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n"
               "    int * i = new int[1];\n"
               "    std::unique_ptr<int> x(i);\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:3]: (error) Mismatching allocation and deallocation: i\n", errout_str());
 
         check("void f() {\n"
               "    int * i = new int;\n"
               "    std::unique_ptr<int[]> x(i);\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:3]: (error) Mismatching allocation and deallocation: i\n", errout_str());
 
         check("void f() {\n"
@@ -2378,7 +2476,7 @@ private:
               "   int * i = new int;\n"
               "   int * j = realloc(i, 2 * sizeof(int));\n"
               "   delete[] j;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:3]: (error) Mismatching allocation and deallocation: i\n"
                       "[test.cpp:3] -> [test.cpp:4]: (error) Mismatching allocation and deallocation: j\n", errout_str());
 
@@ -2387,20 +2485,20 @@ private:
               "    if (int* p = static_cast<int*>(malloc(4))) {\n"
               "        std::unique_ptr<int, decltype(&deleter)> guard(p, &deleter);\n"
               "    }\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n"
               "    if (int* p = static_cast<int*>(malloc(4))) {\n"
               "        std::unique_ptr<int, decltype(&deleter)> guard(p, &deleter);\n"
               "    }\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f(int i) {\n"
               "    int* a = new int[i] {};\n"
               "    delete[] a;\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -2408,26 +2506,26 @@ private:
         check("void f() {\n"
               "    FILE*f=fopen(fname,a);\n"
               "    std::unique_ptr<FILE> fp{f};\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:3]: (error) Mismatching allocation and deallocation: f\n", errout_str());
 
         check("void f() {\n"
               "    FILE*f=fopen(fname,a);\n"
               "    std::unique_ptr<FILE, decltype(&fclose)> fp{f, &fclose};\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n"
               "    FILE*f=fopen(fname,a);\n"
               "    std::shared_ptr<FILE> fp{f, &fclose};\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("struct deleter { void operator()(FILE* f) { fclose(f); }};\n"
               "void f() {\n"
               "    FILE*f=fopen(fname,a);\n"
               "    std::unique_ptr<FILE, deleter> fp{f};\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("int * create();\n"
@@ -2435,7 +2533,7 @@ private:
               "void f() {\n"
               "    int x * = create()\n"
               "    std::unique_ptr<int, decltype(&destroy)> xp{x, &destroy()};\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("int * create();\n"
@@ -2443,45 +2541,45 @@ private:
               "void f() {\n"
               "    int x * = create()\n"
               "    std::unique_ptr<int, decltype(&destroy)> xp(x, &destroy());\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n"
               "    FILE*f=fopen(fname,a);\n"
               "    std::shared_ptr<FILE> fp{f, [](FILE* x) { fclose(x); }};\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n"
               "    FILE*f=fopen(fname,a);\n"
               "    std::shared_ptr<FILE> fp{f, +[](FILE* x) { fclose(x); }};\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n"
               "    FILE*f=fopen(fname,a);\n"
               "    std::shared_ptr<FILE> fp{f, [](FILE* x) { free(f); }};\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:3]: (error) Mismatching allocation and deallocation: f\n", errout_str());
 
         check("void f() {\n"
               "    FILE*f=fopen(fname,a);\n"
               "    std::shared_ptr<FILE> fp{f, [](FILE* x) {}};\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:3]: (error) Mismatching allocation and deallocation: f\n", errout_str());
 
         check("class C;\n"
               "void f() {\n"
               "  C* c = new C{};\n"
               "  std::shared_ptr<C> a{c, [](C*) {}};\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("class C;\n"
               "void f() {\n"
               "  C* c = new C{};\n"
               "  std::shared_ptr<C> a{c, [](C* x) { delete x; }};\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("struct DirDeleter {\n" // #12544
@@ -2489,7 +2587,7 @@ private:
               "};\n"
               "void openDir(DIR* dir) {\n"
               "    std::shared_ptr<DIR> dp(dir, DirDeleter());\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:2]: (information) --check-library: Function closedir() should have <noreturn> configuration\n", errout_str()); // don't crash
     }
     void smartPointerRelease() {
@@ -2498,14 +2596,14 @@ private:
               "    std::unique_ptr<int> x(i);\n"
               "    x.release();\n"
               "    delete i;\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n"
               "    int * i = new int;\n"
               "    std::unique_ptr<int> x(i);\n"
               "    x.release();\n"
-              "}\n", true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:5]: (error) Memory leak: i\n", errout_str());
     }
 
@@ -2541,7 +2639,7 @@ private:
               "        throw 1;\n"
               "    }\n"
               "    free(p);\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f(char *p, int x) {\n"
@@ -2550,7 +2648,7 @@ private:
               "        throw 1;\n"
               "    }\n"
               "    delete p;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f(char *p, int x) {\n"
@@ -2559,7 +2657,7 @@ private:
               "        throw 1;\n"
               "    }\n"
               "    delete [] p;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -2573,7 +2671,7 @@ private:
               "        return;\n"
               "    }\n"
               "    *p = 0;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -2581,7 +2679,7 @@ private:
         check("std::pair<char*, char*> f(size_t n) {\n"
               "   char* p = (char* )malloc(n);\n"
               "   return {p, p};\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -2589,43 +2687,43 @@ private:
         check("uint8_t *f() {\n"
               "    void *x = malloc(1);\n"
               "    return (uint8_t *)x;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("uint8_t f() {\n"
               "    void *x = malloc(1);\n"
               "    return (uint8_t)x;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3]: (error) Memory leak: x\n", errout_str());
 
         check("void** f() {\n"
               "    void *x = malloc(1);\n"
               "    return (void**)x;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void* f() {\n"
               "    void *x = malloc(1);\n"
               "    return (long long)x;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void* f() {\n"
               "    void *x = malloc(1);\n"
               "    return (void*)(short)x;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3]: (error) Memory leak: x\n", errout_str());
 
         check("void* f() {\n"
               "    void *x = malloc(1);\n"
               "    return (mytype)x;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void* f() {\n" // Do not crash
               "    void *x = malloc(1);\n"
               "    return (mytype)y;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3]: (error) Memory leak: x\n", errout_str());
     }
 
@@ -2633,25 +2731,25 @@ private:
         check("void* f() {\n"
               "    void *x = malloc(1);\n"
               "    return (x);\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void* f() {\n"
               "    void *x = malloc(1);\n"
               "    return ((x));\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void* f() {\n"
               "    void *x = malloc(1);\n"
               "    return ((((x))));\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("char* f() {\n"
               "    void *x = malloc(1);\n"
               "    return (char*)(x);\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -2659,7 +2757,7 @@ private:
         check("void* f() {\n"
               "    void *x = malloc (sizeof (struct alloc));\n"
               "    return x + sizeof (struct alloc);\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -2676,34 +2774,56 @@ private:
               "    S* s = new S;\n"
               "    delete s;\n"
               "    return s->f();\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:4] -> [test.cpp:5]: (error) Returning/dereferencing 's' after it is deallocated / released\n", errout_str());
 
         check("int f() {\n"
               "    int* p = new int(3);\n"
               "    delete p;\n"
               "    return *p;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3] -> [test.cpp:4]: (error) Returning/dereferencing 'p' after it is deallocated / released\n", errout_str());
+    }
+
+    void return11() { // #13098
+        check("char malloc_memleak(void) {\n"
+              "    bool flag = false;\n"
+              "    char *ptr = malloc(10);\n"
+              "    if (flag) {\n"
+              "        free(ptr);\n"
+              "    }\n"
+              "    return 'a';\n"
+              "}\n", dinit(CheckOptions, $.cpp = true));
+        ASSERT_EQUALS("[test.cpp:7]: (error) Memory leak: ptr\n", errout_str());
+
+        check("char malloc_memleak(void) {\n"
+              "    bool flag = false;\n"
+              "    char *ptr = malloc(10);\n"
+              "    if (flag) {\n"
+              "        free(ptr);\n"
+              "    }\n"
+              "    return 'a';\n"
+              "}\n");
+        ASSERT_EQUALS("[test.c:7]: (error) Memory leak: ptr\n", errout_str());
     }
 
     void test1() {
         check("void f(double*&p) {\n" // 3809
               "    p = malloc(0x100);\n"
-              "}", /*cpp*/ true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f(int*& p) {\n" // #4400
               "    p = (int*)malloc(4);\n"
               "    p = (int*)malloc(4);\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3]: (error) Memory leak: p\n", errout_str());
 
         check("void f() {\n"
               "    int* p = (int*)malloc(4);\n"
               "    int*& r = p;\n"
               "    r = (int*)malloc(4);\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         TODO_ASSERT_EQUALS("[test.cpp:4]: (error) Memory leak: p\n", "", errout_str());
 
         check("void f() {\n"
@@ -2711,7 +2831,7 @@ private:
               "    int*& r = p;\n"
               "    free(r);\n"
               "    p = (int*)malloc(4);\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         TODO_ASSERT_EQUALS("", "[test.cpp:6]: (error) Memory leak: p\n", errout_str());
     }
 
@@ -2727,7 +2847,7 @@ private:
         check("void f() {\n"
               "    char *&p = x();\n"
               "    p = malloc(10);\n"
-              "};", /*cpp*/ true);
+              "};", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -2741,16 +2861,16 @@ private:
     }
 
     void test5() { // unknown type
-        check("void f() { Fred *p = malloc(10); }", true);
+        check("void f() { Fred *p = malloc(10); }", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:1]: (error) Memory leak: p\n", errout_str());
 
-        check("void f() { Fred *p = malloc(10); }", false);
+        check("void f() { Fred *p = malloc(10); }");
         ASSERT_EQUALS("[test.c:1]: (error) Memory leak: p\n", errout_str());
 
-        check("void f() { Fred *p = new Fred; }", true);
+        check("void f() { Fred *p = new Fred; }", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
-        check("void f() { Fred fred = malloc(10); }", true);
+        check("void f() { Fred fred = malloc(10); }", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -2758,7 +2878,7 @@ private:
         check("void f() {\n"
               "    char *p = malloc(10);\n"
               "    throw 123;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:3]: (error) Memory leak: p\n", errout_str());
 
         check("void f() {\n"
@@ -2768,7 +2888,7 @@ private:
               "        throw 123;\n"
               "    } catch (...) { }\n"
               "    free(p);\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -2785,7 +2905,7 @@ private:
               "        throw ::NS::Except();\n"
               "    }\n"
               "    delete pi;\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -2823,27 +2943,31 @@ private:
     }
 
     void configuration3() {
-        const char * code = "void f() {\n"
-                            "    char *p = malloc(10);\n"
-                            "    if (set_data(p)) { }\n"
-                            "}";
-        check(code);
-        ASSERT_EQUALS("[test.c:4]: (information) --check-library: Function set_data() should have <use>/<leak-ignore> configuration\n", errout_str());
-        check(code, true);
-        ASSERT_EQUALS("[test.cpp:4]: (information) --check-library: Function set_data() should have <use>/<leak-ignore> configuration\n", errout_str());
+        {
+            const char code[] = "void f() {\n"
+                                "    char *p = malloc(10);\n"
+                                "    if (set_data(p)) { }\n"
+                                "}";
+            check(code);
+            ASSERT_EQUALS("[test.c:4]: (information) --check-library: Function set_data() should have <use>/<leak-ignore> configuration\n", errout_str());
+            check(code, dinit(CheckOptions, $.cpp = true));
+            ASSERT_EQUALS("[test.cpp:4]: (information) --check-library: Function set_data() should have <use>/<leak-ignore> configuration\n", errout_str());
+        }
 
-        code = "void f() {\n"
-               "    char *p = malloc(10);\n"
-               "    if (set_data(p)) { return; }\n"
-               "}";
-        check(code);
-        ASSERT_EQUALS("[test.c:3]: (information) --check-library: Function set_data() should have <use>/<leak-ignore> configuration\n"
-                      "[test.c:4]: (information) --check-library: Function set_data() should have <use>/<leak-ignore> configuration\n"
-                      , errout_str());
-        check(code, true);
-        ASSERT_EQUALS("[test.cpp:3]: (information) --check-library: Function set_data() should have <use>/<leak-ignore> configuration\n"
-                      "[test.cpp:4]: (information) --check-library: Function set_data() should have <use>/<leak-ignore> configuration\n"
-                      , errout_str());
+        {
+            const char code[] = "void f() {\n"
+                                "    char *p = malloc(10);\n"
+                                "    if (set_data(p)) { return; }\n"
+                                "}";
+            check(code);
+            ASSERT_EQUALS("[test.c:3]: (information) --check-library: Function set_data() should have <use>/<leak-ignore> configuration\n"
+                          "[test.c:4]: (information) --check-library: Function set_data() should have <use>/<leak-ignore> configuration\n"
+                          , errout_str());
+            check(code, dinit(CheckOptions, $.cpp = true));
+            ASSERT_EQUALS("[test.cpp:3]: (information) --check-library: Function set_data() should have <use>/<leak-ignore> configuration\n"
+                          "[test.cpp:4]: (information) --check-library: Function set_data() should have <use>/<leak-ignore> configuration\n"
+                          , errout_str());
+        }
     }
 
     void configuration4() {
@@ -2863,7 +2987,7 @@ private:
 
         check("void f() {\n"
               "    static_assert(1 == sizeof(char), \"test\");\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("namespace pal {\n" // #11237
@@ -2871,13 +2995,13 @@ private:
               "}\n"
               "int main() {\n"
               "    pal::AutoTimer();\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("struct AutoTimer {};\n"
               "int main() {\n"
               "    AutoTimer();\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n" // #8666
@@ -2906,7 +3030,7 @@ private:
               "        void* buf = malloc(10);\n"
               "        p = reinterpret_cast<S*>(buf);\n"
               "    }\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:5]: (error) Resource leak: file\n", errout_str());
     }
 
@@ -2922,7 +3046,7 @@ private:
               "}\n"
               "void g(void (*cb)()) {\n"
               "    cb();\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -2937,19 +3061,19 @@ private:
         check("void QueueDSMCCPacket(unsigned char *data, int length) {\n"
               "    unsigned char *dataCopy = malloc(length * sizeof(unsigned char));\n"
               "    m_dsmccQueue.enqueue(new DSMCCPacket(dataCopy));\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:4]: (information) --check-library: Function DSMCCPacket() should have <use>/<leak-ignore> configuration\n", errout_str());
 
         check("void QueueDSMCCPacket(unsigned char *data, int length) {\n"
               "    unsigned char *dataCopy = malloc(length * sizeof(unsigned char));\n"
               "    m_dsmccQueue.enqueue(new DSMCCPacket(somethingunrelated));\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:4]: (error) Memory leak: dataCopy\n", errout_str());
 
         check("void f() {\n"
               "  char *buf = new char[1000];\n"
               "  clist.push_back(new (std::nothrow) C(buf));\n"
-              "}", true);
+              "}", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:4]: (information) --check-library: Function C() should have <use>/<leak-ignore> configuration\n", errout_str());
     }
 
@@ -2958,7 +3082,7 @@ private:
               "  double *new = malloc(1*sizeof(double));\n"
               "  free(new);\n"
               "  return 0;\n"
-              "}", false);
+              "}");
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -2982,7 +3106,7 @@ private:
               "  int *pt = new int(1);\n"
               "  mList.push_back(std::shared_ptr<int>(pt));\n"
               "}\n",
-              true
+              dinit(CheckOptions, $.cpp = true)
               );
         ASSERT_EQUALS("", errout_str());
     }
@@ -3000,7 +3124,7 @@ private:
                                    "    </arg>\n"
                                    "  </function>\n"
                                    "</def>";
-        const Settings settingsFunctionCall = settingsBuilder(settings).libraryxml(xmldata, sizeof(xmldata)).build();
+        const Settings settingsFunctionCall = settingsBuilder(settings).libraryxml(xmldata).build();
 
         check("void test_func()\n"
               "{\n"
@@ -3018,7 +3142,7 @@ private:
               "void f2() {\n"
               "    int* p = new int;\n"
               "    h(1, static_cast<void*>(p));\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:6]: (information) --check-library: Function g() should have <use>/<leak-ignore> configuration\n"
                       "[test.cpp:10]: (information) --check-library: Function h() should have <use>/<leak-ignore> configuration\n",
                       errout_str());
@@ -3033,7 +3157,7 @@ private:
                                    "    <arg nr=\"1\" direction=\"in\"/>\n"
                                    "  </function>\n"
                                    "</def>\n";
-        const Settings settingsLeakIgnore = settingsBuilder().libraryxml(xmldata, sizeof(xmldata)).build();
+        const Settings settingsLeakIgnore = settingsBuilder().libraryxml(xmldata).build();
         check("void f() {\n"
               "    double* a = new double[1024];\n"
               "    SomeClass::someMethod(a);\n"
@@ -3053,7 +3177,7 @@ private:
         check("void f(int n) {\n"
               "    char* p = new char[n];\n"
               "    v.push_back(p);\n"
-              "}\n", /*cpp*/ true);
+              "}\n", dinit(CheckOptions, $.cpp = true));
         ASSERT_EQUALS("[test.cpp:4]: (information) --check-library: Function unknown::push_back() should have <use>/<leak-ignore> configuration\n", errout_str());
     }
 };
@@ -3069,9 +3193,7 @@ private:
 
 #define checkP(...) checkP_(__FILE__, __LINE__, __VA_ARGS__)
     void checkP_(const char* file, int line, const char code[], bool cpp = false) {
-        std::vector<std::string> files(1, cpp?"test.cpp":"test.c");
-        Tokenizer tokenizer(settings, *this);
-        PreprocessorHelper::preprocess(code, files, tokenizer, *this);
+        SimpleTokenizer2 tokenizer(settings, *this, code, cpp?"test.cpp":"test.c");
 
         // Tokenizer..
         ASSERT_LOC(tokenizer.simplifyTokens1(""), file, line);
@@ -3104,8 +3226,8 @@ private:
     }
 };
 
-#if !defined(__MINGW32__)
-// TODO: this crashes with a stack overflow for MinGW in the CI
+#if !defined(__MINGW32__) && !defined(__CYGWIN__)
+// TODO: this crashes with a stack overflow for MinGW and error 2816 for Cygwinin the CI
 REGISTER_TEST(TestLeakAutoVarRecursiveCountLimit)
 #endif
 
@@ -3116,7 +3238,8 @@ public:
 private:
     const Settings settings = settingsBuilder().library("std.cfg").checkLibrary().build();
 
-    void check_(const char* file, int line, const char code[]) {
+    template<size_t size>
+    void check_(const char* file, int line, const char (&code)[size]) {
         // Tokenize..
         SimpleTokenizer tokenizer(settings, *this);
         ASSERT_LOC(tokenizer.tokenize(code), file, line);
@@ -3219,10 +3342,11 @@ public:
 private:
     const Settings settings = settingsBuilder().library("windows.cfg").build();
 
-    void check_(const char* file, int line, const char code[]) {
+    template<size_t size>
+    void check_(const char* file, int line, const char (&code)[size]) {
         // Tokenize..
-        SimpleTokenizer tokenizer(settings, *this);
-        ASSERT_LOC(tokenizer.tokenize(code, false), file, line);
+        SimpleTokenizer tokenizer(settings, *this, false);
+        ASSERT_LOC(tokenizer.tokenize(code), file, line);
 
         // Check for leaks..
         runChecks<CheckLeakAutoVar>(tokenizer, this);
@@ -3290,7 +3414,8 @@ public:
 private:
     const Settings settings = settingsBuilder().library("std.cfg").library("posix.cfg").build();
 
-    void check_(const char* file, int line, const char code[]) {
+    template<size_t size>
+    void check_(const char* file, int line, const char (&code)[size]) {
         // Tokenize..
         SimpleTokenizer tokenizer(settings, *this);
         ASSERT_LOC(tokenizer.tokenize(code), file, line);
@@ -3301,6 +3426,9 @@ private:
 
     void run() override {
         TEST_CASE(memleak_getline);
+        TEST_CASE(deallocuse_fdopen);
+        TEST_CASE(doublefree_fdopen); // #12781
+        TEST_CASE(memleak_open); // #13356
     }
 
     void memleak_getline() {
@@ -3308,6 +3436,48 @@ private:
               "    std::string str;\n"
               "    if (getline(is, str, 'x').good()) {};\n"
               "    if (!getline(is, str, 'x').good()) {};\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void deallocuse_fdopen() {
+        check("struct FileCloser {\n" // #13126
+              "    void operator()(std::FILE * ptr) const {\n"
+              "        std::fclose(ptr);\n"
+              "    }\n"
+              "};\n"
+              "void f(char* fileName) {\n"
+              "    std::unique_ptr<std::FILE, FileCloser> out;\n"
+              "    int fd = mkstemps(fileName, 4);\n"
+              "    if (fd != -1)\n"
+              "        out.reset(fdopen(fd, \"w\"));\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void doublefree_fdopen() { // #12781
+        check("void foo(void) {\n"
+              "    int fd;\n"
+              "    FILE *stream;\n"
+              "    fd = open(\"/foo\", O_RDONLY);\n"
+              "    if (fd == -1) return;\n"
+              "    stream = fdopen(fd, \"r\");\n"
+              "    if (!stream) {\n"
+              "        close(fd);\n"
+              "        return;\n"
+              "    }\n"
+              "    fclose(stream);\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void memleak_open() { // #13356
+        check("int f() {\n"
+              "    int fd = open(\"abc \", O_RDONLY);\n"
+              "    if (fd > -1) {\n"
+              "        return fd;\n"
+              "    }\n"
+              "    return -1;\n"
               "}\n");
         ASSERT_EQUALS("", errout_str());
     }

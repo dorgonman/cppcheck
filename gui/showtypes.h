@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2023 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,9 +19,11 @@
 #ifndef SHOWTYPES_H
 #define SHOWTYPES_H
 
+#include <cstdint>
+
 #include <QVariant>
 
-enum class Severity;
+enum class Severity : std::uint8_t;
 
 /// @addtogroup GUI
 /// @{
@@ -41,7 +43,7 @@ public:
     /**
      * @brief Show types we have (i.e. severities in the GUI).
      */
-    enum ShowType {
+    enum ShowType : std::uint8_t {
         ShowStyle = 0,
         ShowWarnings,
         ShowPerformance,

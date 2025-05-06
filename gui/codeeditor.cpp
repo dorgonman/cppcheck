@@ -22,7 +22,6 @@
 
 #include <QChar>
 #include <QColor>
-#include <QCryptographicHash>
 #include <QFont>
 #include <QFontMetrics>
 #include <QKeySequence>
@@ -31,7 +30,6 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QRect>
-#include <QRectF>
 #include <QRegularExpressionMatchIterator>
 #include <QShortcut>
 #include <QTextBlock>
@@ -370,9 +368,9 @@ int CodeEditor::lineNumberAreaWidth()
     }
 
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 11, 0))
-    const int space = 3 + fontMetrics().horizontalAdvance(QLatin1Char('9')) * digits;
+    const int space = 3 + (fontMetrics().horizontalAdvance(QLatin1Char('9')) * digits);
 #else
-    const int space = 3 + fontMetrics().width(QLatin1Char('9')) * digits;
+    const int space = 3 + (fontMetrics().width(QLatin1Char('9')) * digits);
 #endif
     return space;
 }
@@ -427,8 +425,8 @@ void CodeEditor::lineNumberAreaPaintEvent(const QPaintEvent *event)
 
     QTextBlock block = firstVisibleBlock();
     int blockNumber = block.blockNumber();
-    int top = (int) blockBoundingGeometry(block).translated(contentOffset()).top();
-    int bottom = top + (int) blockBoundingRect(block).height();
+    int top = static_cast<int>(blockBoundingGeometry(block).translated(contentOffset()).top());
+    int bottom = top + static_cast<int>(blockBoundingRect(block).height());
 
     while (block.isValid() && top <= event->rect().bottom()) {
         if (block.isVisible() && bottom >= event->rect().top()) {
@@ -440,7 +438,7 @@ void CodeEditor::lineNumberAreaPaintEvent(const QPaintEvent *event)
 
         block = block.next();
         top = bottom;
-        bottom = top + (int) blockBoundingRect(block).height();
+        bottom = top + static_cast<int>(blockBoundingRect(block).height());
         ++blockNumber;
     }
 }

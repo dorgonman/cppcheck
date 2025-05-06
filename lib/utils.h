@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,6 +33,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 struct SelectMapKeys {
@@ -321,7 +322,7 @@ static inline std::string id_string_i(std::uintptr_t l)
     while (l != 0)
     {
         char c;
-        const uintptr_t temp = l % 16; // get the remainder
+        const std::uintptr_t temp = l % 16; // get the remainder
         if (temp < 10) {
             // 0-9
             c = '0' + temp;
@@ -339,13 +340,36 @@ static inline std::string id_string_i(std::uintptr_t l)
 
 static inline std::string id_string(const void* p)
 {
-    return id_string_i(reinterpret_cast<uintptr_t>(p));
+    return id_string_i(reinterpret_cast<std::uintptr_t>(p));
 }
 
 static inline const char* bool_to_string(bool b)
 {
     return b ? "true" : "false";
 }
+
+/**
+ * Remove heading and trailing whitespaces from the input parameter.
+ * If string is all spaces/tabs, return empty string.
+ * @param s The string to trim.
+ * @param t The characters to trim.
+ */
+CPPCHECKLIB std::string trim(const std::string& s, const std::string& t = " \t");
+
+/**
+ * Replace all occurrences of searchFor with replaceWith in the
+ * given source.
+ * @param source The string to modify
+ * @param searchFor What should be searched for
+ * @param replaceWith What will replace the found item
+ */
+CPPCHECKLIB void findAndReplace(std::string &source, const std::string &searchFor, const std::string &replaceWith);
+
+/**
+ * Replace all escape sequences in the given string.
+ * @param source The string that contains escape sequences
+ */
+CPPCHECKLIB std::string replaceEscapeSequences(const std::string &source);
 
 namespace cppcheck
 {
@@ -362,9 +386,47 @@ namespace cppcheck
 }
 
 template<typename T>
+static inline T* default_if_null(T* p, T* def)
+{
+    return p ? p : def;
+}
+
+template<typename T>
 static inline T* empty_if_null(T* p)
 {
-    return p ? p : "";
+    return default_if_null(p, "");
+}
+
+/**
+ * Split string by given sperator.
+ * @param str The string to split
+ * @param sep The seperator
+ * @return The list of seperate strings (including empty ones). The whole input string if no seperator found.
+ */
+CPPCHECKLIB std::vector<std::string> splitString(const std::string& str, char sep);
+
+namespace utils {
+    template<class T>
+    constexpr typename std::add_const<T>::type & as_const(T& t) noexcept
+    {
+        // NOLINTNEXTLINE(bugprone-return-const-ref-from-parameter) - potential false positive
+        return t;
+    }
+
+    // Thread-unsafe memoization
+    template<class F, class R=decltype(std::declval<F>()())>
+    static inline std::function<R()> memoize(F f)
+    {
+        bool init = false;
+        R result{};
+        return [=]() mutable -> R {
+            if (init)
+                return result;
+            result = f();
+            init = true;
+            return result;
+        };
+    }
 }
 
 #endif

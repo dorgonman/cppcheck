@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,26 +23,29 @@
 #include "config.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <istream>
 #include <list>
+#include <mutex>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
-/// @addtogroup Core
-/// @{
-
 class Tokenizer;
 class ErrorMessage;
 class ErrorLogger;
-enum class Certainty;
+enum class Certainty : std::uint8_t;
+class FileWithDetails;
+
+/// @addtogroup Core
+/// @{
 
 /** @brief class for handling suppressions */
 class CPPCHECKLIB SuppressionList {
 public:
 
-    enum class Type {
+    enum class Type : std::uint8_t {
         unique, file, block, blockBegin, blockEnd, macro
     };
 
@@ -115,14 +118,24 @@ public:
          */
         bool parseComment(std::string comment, std::string *errorMessage);
 
-        bool isSuppressed(const ErrorMessage &errmsg) const;
+        enum class Result : std::uint8_t {
+            None,
+            Checked,
+            Matched
+        };
+
+        Result isSuppressed(const ErrorMessage &errmsg) const;
 
         bool isMatch(const ErrorMessage &errmsg);
 
         std::string getText() const;
 
+        bool isWildcard() const {
+            return fileName.find_first_of("?*") != std::string::npos;
+        }
+
         bool isLocal() const {
-            return !fileName.empty() && fileName.find_first_of("?*") == std::string::npos;
+            return !fileName.empty() && !isWildcard();
         }
 
         bool isSameParameters(const Suppression &other) const {
@@ -134,6 +147,8 @@ public:
                    thisAndNextLine == other.thisAndNextLine;
         }
 
+        std::string toString() const;
+
         std::string errorId;
         std::string fileName;
         int lineNumber = NO_LINE;
@@ -144,10 +159,11 @@ public:
         std::string macroName;
         std::size_t hash{};
         bool thisAndNextLine{}; // Special case for backwards compatibility: { // cppcheck-suppress something
-        bool matched{};
-        bool checked{}; // for inline suppressions, checked or not
+        bool matched{}; /** This suppression was fully matched in an isSuppressed() call */
+        bool checked{}; /** This suppression applied to code which was being analyzed but did not match the error in an isSuppressed() call */
+        bool isInline{};
 
-        enum { NO_LINE = -1 };
+        enum : std::int8_t { NO_LINE = -1 };
     };
 
     /**
@@ -173,6 +189,13 @@ public:
     static std::vector<Suppression> parseMultiSuppressComment(const std::string &comment, std::string *errorMessage);
 
     /**
+     * Create a Suppression object from a suppression line
+     * @param line The line to parse.
+     * @return a suppression object
+     */
+    static Suppression parseLine(const std::string &line);
+
+    /**
      * @brief Don't show the given error.
      * @param line Description of error to suppress (in id:file:line format).
      * @return error message. empty upon success
@@ -193,6 +216,13 @@ public:
      * @return error message. empty upon success
      */
     std::string addSuppressions(std::list<Suppression> suppressions);
+
+    /**
+     * @brief Updates the state of the given suppression.
+     * @param suppression the suppression to update
+     * @return true if suppression to update was found
+     */
+    bool updateSuppressionState(const SuppressionList::Suppression& suppression);
 
     /**
      * @brief Returns true if this message should not be shown to the user.
@@ -227,19 +257,25 @@ public:
      * @brief Returns list of unmatched local (per-file) suppressions.
      * @return list of unmatched suppressions
      */
-    std::list<Suppression> getUnmatchedLocalSuppressions(const std::string &file, const bool unusedFunctionChecking) const;
+    std::list<Suppression> getUnmatchedLocalSuppressions(const FileWithDetails &file, bool includeUnusedFunction) const;
 
     /**
      * @brief Returns list of unmatched global (glob pattern) suppressions.
      * @return list of unmatched suppressions
      */
-    std::list<Suppression> getUnmatchedGlobalSuppressions(const bool unusedFunctionChecking) const;
+    std::list<Suppression> getUnmatchedGlobalSuppressions(bool includeUnusedFunction) const;
+
+    /**
+     * @brief Returns list of unmatched inline suppressions.
+     * @return list of unmatched suppressions
+     */
+    std::list<Suppression> getUnmatchedInlineSuppressions(bool includeUnusedFunction) const;
 
     /**
      * @brief Returns list of all suppressions.
      * @return list of suppressions
      */
-    const std::list<Suppression> &getSuppressions() const;
+    std::list<Suppression> getSuppressions() const;
 
     /**
      * @brief Marks Inline Suppressions as checked if source line is in the token stream
@@ -254,6 +290,7 @@ public:
     static bool reportUnmatchedSuppressions(const std::list<SuppressionList::Suppression> &unmatched, ErrorLogger &errorLogger);
 
 private:
+    mutable std::mutex mSuppressionsSync;
     /** @brief List of error which the user doesn't want to see. */
     std::list<Suppression> mSuppressions;
 };

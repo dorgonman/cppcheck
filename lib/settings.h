@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,11 +27,10 @@
 #include "library.h"
 #include "platform.h"
 #include "standards.h"
-#include "suppressions.h"
+#include "checkers.h"
 
 #include <algorithm>
 #include <atomic>
-#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <list>
@@ -41,8 +40,14 @@
 #include <tuple>
 #include <vector>
 #include <unordered_set>
+#include <utility>
 
-enum class SHOWTIME_MODES;
+#if defined(USE_WINDOWS_SEH) || defined(USE_UNIX_SIGNAL_HANDLING)
+#include <cstdio>
+#endif
+
+struct Suppressions;
+enum class SHOWTIME_MODES : std::uint8_t;
 namespace ValueFlow {
     class Value;
 }
@@ -64,16 +69,16 @@ public:
         mFlags = 0xFFFFFFFF;
     }
     bool isEnabled(T flag) const {
-        return (mFlags & (1U << (uint32_t)flag)) != 0;
+        return (mFlags & (1U << static_cast<uint32_t>(flag))) != 0;
     }
     void enable(T flag) {
-        mFlags |= (1U << (uint32_t)flag);
+        mFlags |= (1U << static_cast<uint32_t>(flag));
     }
     void enable(SimpleEnableGroup<T> group) {
         mFlags |= group.intValue();
     }
     void disable(T flag) {
-        mFlags &= ~(1U << (uint32_t)flag);
+        mFlags &= ~(1U << static_cast<uint32_t>(flag));
     }
     void disable(SimpleEnableGroup<T> group) {
         mFlags &= ~(group.intValue());
@@ -92,6 +97,7 @@ public:
  * to pass individual values to functions or constructors now or in the
  * future when we might have even more detailed settings.
  */
+// NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding)
 class CPPCHECKLIB WARN_UNUSED Settings {
 private:
 
@@ -101,9 +107,12 @@ private:
 public:
     Settings();
 
-    static std::string loadCppcheckCfg(Settings& settings, Suppressions& suppressions);
+    static std::string loadCppcheckCfg(Settings& settings, Suppressions& suppressions, bool debug = false);
 
     static std::pair<std::string, std::string> getNameAndVersion(const std::string& productName);
+
+    /** @brief Report type */
+    ReportType reportType = ReportType::normal;
 
     /** @brief addons, either filename of python/json file or json data */
     std::unordered_set<std::string> addons;
@@ -141,7 +150,7 @@ public:
     std::string checkersReportFilename;
 
     /** @brief check unknown function return values */
-    std::set<std::string> checkUnknownFunctionReturn;
+    std::set<std::string> checkUnknownFunctionReturn; // TODO: move to Library?
 
     /** Check unused/uninstantiated templates */
     bool checkUnusedTemplates = true;
@@ -155,8 +164,11 @@ public:
     /** Use clang-tidy */
     bool clangTidy{};
 
+    /** Custom clang-tidy executable */
+    std::string clangTidyExecutable = "clang-tidy";
+
     /** Internal: Clear the simplecpp non-existing include cache */
-    bool clearIncludeCache{};
+    bool clearIncludeCache{}; // internal
 
     /** @brief include paths excluded from checking the configuration */
     std::set<std::string> configExcludePaths;
@@ -167,8 +179,32 @@ public:
     /** cppcheck.cfg: About text */
     std::string cppcheckCfgAbout;
 
+    /** @brief check Emacs marker to detect extension-less and *.h files as C++ */
+    bool cppHeaderProbe{};
+
     /** @brief Are we running from DACA script? */
     bool daca{};
+
+    /** @brief Is --debug-clang-output given? */
+    bool debugClangOutput{};
+
+    /** @brief Is --debug-ignore given? */
+    bool debugignore{};
+
+    /** @brief Internal: Is --debug-lookup or --debug-lookup=all given? */
+    bool debuglookup{};
+
+    /** @brief Internal: Is --debug-lookup=addon given? */
+    bool debuglookupAddon{};
+
+    /** @brief Internal: Is --debug-lookup=config given? */
+    bool debuglookupConfig{};
+
+    /** @brief Internal: Is --debug-lookup=library given? */
+    bool debuglookupLibrary{};
+
+    /** @brief Internal: Is --debug-lookup=platform given? */
+    bool debuglookupPlatform{};
 
     /** @brief Is --debug-normal given? */
     bool debugnormal{};
@@ -184,7 +220,9 @@ public:
 
     /** @brief Is --dump given? */
     bool dump{};
-    std::string dumpFile;
+
+    /** @brief Do not filter duplicated errors. */
+    bool emitDuplicates{};
 
     /** @brief Name of the language that is enforced. Empty per default. */
     Standards::Language enforcedLang{};
@@ -192,9 +230,11 @@ public:
 #if defined(USE_WINDOWS_SEH) || defined(USE_UNIX_SIGNAL_HANDLING)
     /** @brief Is --exception-handling given */
     bool exceptionHandling{};
+
+    FILE* exceptionOutput = stdout;
 #endif
 
-    enum class ExecutorType
+    enum class ExecutorType : std::uint8_t
     {
 #ifdef HAS_THREADING_MODEL_THREAD
         Thread,
@@ -236,8 +276,10 @@ public:
     /** Library */
     Library library;
 
+#ifdef HAS_THREADING_MODEL_FORK
     /** @brief Load average value */
     int loadAverage{};
+#endif
 
     /** @brief Maximum number of configurations to check before bailing.
         Default is 12. (--max-configs=N) */
@@ -252,19 +294,13 @@ public:
     /** @brief write results (--output-file=&lt;file&gt;) */
     std::string outputFile;
 
+    enum class OutputFormat : std::uint8_t {text, plist, sarif, xml};
+    OutputFormat outputFormat = OutputFormat::text;
+
     Platform platform;
 
-    /** @brief Experimental: --performance-valueflow-max-time=T */
-    int performanceValueFlowMaxTime = -1;
-
-    /** @brief --performance-valueflow-max-if-count=C */
-    int performanceValueFlowMaxIfCount = -1;
-
-    /** @brief max number of sets of arguments to pass to subfuncions in valueflow */
-    int performanceValueFlowMaxSubFunctionArgs = 256;
-
     /** @brief pid of cppcheck. Intention is that this is set in the main process. */
-    int pid;
+    int pid; // internal
 
     /** @brief plist output (--plist-output=&lt;dir&gt;) */
     std::string plistOutput;
@@ -365,9 +401,6 @@ public:
     /** Struct contains standards settings */
     Standards standards;
 
-    /** @brief suppressions */
-    Suppressions supprs;
-
     /** @brief The output format in which the errors are printed in text mode,
         e.g. "{severity} {file}:{line} {message} {id}" */
     std::string templateFormat;
@@ -391,17 +424,48 @@ public:
     /** @brief forced includes given by the user */
     std::list<std::string> userIncludes;
 
-    /** @brief the maximum iterations of valueflow (--valueflow-max-iterations=T) */
-    std::size_t valueFlowMaxIterations = 4;
+    // TODO: adjust all options so 0 means "disabled" and -1 "means "unlimited"
+    struct ValueFlowOptions
+    {
+        /** @brief the maximum iterations to execute */
+        std::size_t maxIterations = 4;
+
+        /** @brief maximum numer if-branches */
+        int maxIfCount = -1;
+
+        /** @brief maximum number of sets of arguments to pass to subfuncions */
+        int maxSubFunctionArgs = 256;
+
+        /** @brief Experimental: maximum execution time */
+        int maxTime = -1;
+
+        /** @brief Control if condition expression analysis is performed */
+        bool doConditionExpressionAnalysis = true;
+
+        /** @brief Maximum performed for-loop count */
+        int maxForLoopCount = 10000;
+
+        /** @brief Maximum performed forward branches */
+        int maxForwardBranches = -1;
+
+        /** @brief Maximum performed alignof recursion */
+        int maxAlignOfRecursion = 100;
+
+        /** @brief Maximum performed sizeof recursion */
+        int maxSizeOfRecursion = 100;
+
+        /** @brief Maximum expression varid depth */
+        int maxExprVarIdDepth = 4;
+    };
+
+    /** @brief The ValueFlow options */
+    ValueFlowOptions vfOptions;
 
     /** @brief Is --verbose given? */
     bool verbose{};
 
-    /** @brief write XML results (--xml) */
-    bool xml{};
-
     /** @brief XML version (--xml-version=..) */
-    int xml_version = 2;
+    int xml_version = 2; // TODO: integrate into outputFormat enum?
 
     /**
      * @brief return true if a included file is to be excluded in Preprocessor::getConfigs
@@ -458,7 +522,8 @@ public:
         return jobs == 1;
     }
 
-    enum class CheckLevel {
+    enum class CheckLevel : std::uint8_t {
+        reduced,
         normal,
         exhaustive
     };

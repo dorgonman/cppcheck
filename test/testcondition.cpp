@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,8 +22,8 @@
 #include "helpers.h"
 #include "platform.h"
 #include "settings.h"
-#include "tokenize.h"
 
+#include <cstddef>
 #include <limits>
 #include <string>
 #include <vector>
@@ -41,8 +41,9 @@ private:
                            "<def>\n"
                            "  <function name=\"bar\"> <pure/> </function>\n"
                            "</def>";
-        settings1 = settingsBuilder(settings1).libraryxml(cfg, sizeof(cfg)).build();
+        settings1 = settingsBuilder(settings1).libraryxml(cfg).build();
 
+        // TODO: mNewTemplate = true;
         TEST_CASE(assignAndCompare);   // assignment and comparison don't match
         TEST_CASE(mismatchingBitAnd);  // overlapping bitmasks
         TEST_CASE(comparison);         // CheckCondition::comparison test cases
@@ -87,6 +88,7 @@ private:
         TEST_CASE(oppositeInnerConditionOr);
         TEST_CASE(oppositeInnerConditionEmpty);
         TEST_CASE(oppositeInnerConditionFollowVar);
+        TEST_CASE(oppositeInnerConditionLambda);
 
         TEST_CASE(identicalInnerCondition);
 
@@ -122,13 +124,23 @@ private:
         TEST_CASE(knownConditionCast); // #9976
         TEST_CASE(knownConditionIncrementLoop); // #9808
         TEST_CASE(knownConditionAfterBailout); // #12526
+        TEST_CASE(knownConditionIncDecOperator);
+        TEST_CASE(knownConditionFloating);
     }
 
+    struct CheckOptions
+    {
+        CheckOptions() = default;
+        const Settings* s = nullptr;
+        bool cpp = true;
+        bool inconclusive = false;
+    };
+
 #define check(...) check_(__FILE__, __LINE__, __VA_ARGS__)
-    void check_(const char* file, int line, const char code[], const Settings &settings, const char* filename = "test.cpp") {
-        std::vector<std::string> files(1, filename);
-        Tokenizer tokenizer(settings, *this);
-        PreprocessorHelper::preprocess(code, files, tokenizer, *this);
+    void check_(const char* file, int line, const char code[], const CheckOptions& options = make_default_obj()) {
+        const Settings settings = settingsBuilder(options.s ? *options.s : settings0).certainty(Certainty::inconclusive, options.inconclusive).build();
+
+        SimpleTokenizer2 tokenizer(settings, *this, code, options.cpp ? "test.cpp" : "test.c");
 
         // Tokenizer..
         ASSERT_LOC(tokenizer.simplifyTokens1(""), file, line);
@@ -137,9 +149,18 @@ private:
         runChecks<CheckCondition>(tokenizer, this);
     }
 
-    void check_(const char* file, int line, const char code[], const char* filename = "test.cpp", bool inconclusive = false) {
-        const Settings settings = settingsBuilder(settings0).certainty(Certainty::inconclusive, inconclusive).build();
-        check_(file, line, code, settings, filename);
+#define checkP(...) checkP_(__FILE__, __LINE__, __VA_ARGS__)
+    void checkP_(const char* file, int line, const char code[])
+    {
+        const Settings settings = settingsBuilder(settings0).severity(Severity::performance).certainty(Certainty::inconclusive).build();
+
+        SimpleTokenizer2 tokenizer(settings, *this, code, "test.cpp");
+
+        // Tokenizer..
+        ASSERT_LOC(tokenizer.simplifyTokens1(""), file, line);
+
+        // Run checks..
+        runChecks<CheckCondition>(tokenizer, this);
     }
 
     void assignAndCompare() {
@@ -477,6 +498,23 @@ private:
                       "[test.cpp:2]: (style) Expression '(X & 0x100) == 0x200' is always false.\n"
                       "[test.cpp:3]: (style) Expression '(X & 0x100) == 0x200' is always false.\n",
                       errout_str());
+
+        checkP("#define MACRO1 (0x0010)\n" // #13222
+               "#define MACRO2 (0x0020)\n"
+               "#define MACRO_ALL (MACRO1 | MACRO2)\n"
+               "void f() {\n"
+               "    if (MACRO_ALL == 0) {}\n"
+               "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        checkP("void f(int i, int j) {\n" // #13360
+               "    int X = 0x10;\n"
+               "    if ((i & 0xff00) == X) {}\n"
+               "    if (X == (j & 0xff00)) {}\n"
+               "}\n");
+        ASSERT_EQUALS("[test.cpp:3]: (style) Expression '(X & 0xff00) == 0x10' is always false.\n"
+                      "[test.cpp:4]: (style) Expression '(X & 0xff00) == 0x10' is always false.\n",
+                      errout_str());
     }
 
 #define checkPureFunction(code) checkPureFunction_(code, __FILE__, __LINE__)
@@ -538,7 +576,8 @@ private:
         ASSERT_EQUALS("", errout_str());
     }
 
-    void checkPureFunction_(const char code[], const char* file, int line) {
+    template<size_t size>
+    void checkPureFunction_(const char (&code)[size], const char* file, int line) {
         // Tokenize..
         SimpleTokenizer tokenizer(settings1, *this);
         ASSERT_LOC(tokenizer.tokenize(code), file, line);
@@ -1271,27 +1310,27 @@ private:
     void incorrectLogicOperator6() { // char literals
         check("void f(char x) {\n"
               "  if (x == '1' || x == '2') {}\n"
-              "}", "test.cpp", true);
+              "}", dinit(CheckOptions, $.inconclusive = true));
         ASSERT_EQUALS("", errout_str());
 
         check("void f(char x) {\n"
               "  if (x == '1' && x == '2') {}\n"
-              "}", "test.cpp", true);
+              "}", dinit(CheckOptions, $.inconclusive = true));
         ASSERT_EQUALS("[test.cpp:2]: (warning) Logical conjunction always evaluates to false: x == '1' && x == '2'.\n", errout_str());
 
         check("int f(char c) {\n"
               "  return (c >= 'a' && c <= 'z');\n"
-              "}", "test.cpp", true);
+              "}", dinit(CheckOptions, $.inconclusive = true));
         ASSERT_EQUALS("", errout_str());
 
         check("int f(char c) {\n"
               "  return (c <= 'a' && c >= 'z');\n"
-              "}", "test.cpp", true);
+              "}", dinit(CheckOptions, $.inconclusive = true));
         ASSERT_EQUALS("[test.cpp:2]: (warning, inconclusive) Logical conjunction always evaluates to false: c <= 'a' && c >= 'z'.\n", errout_str());
 
         check("int f(char c) {\n"
               "  return (c <= 'a' && c >= 'z');\n"
-              "}", "test.cpp", false);
+              "}");
         ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:2]: (style) Return value 'c>='z'' is always false\n", errout_str());
     }
 
@@ -2129,6 +2168,15 @@ private:
               "    bool m_value = false;\n"
               "};");
         ASSERT_EQUALS("", errout_str());
+
+        // #12725
+        check("bool f(bool b) {\n"
+              "    if (b)\n"
+              "        return !b;\n"
+              "    b = g();\n"
+              "    return b;\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:3]: (style) Return value '!b' is always false\n", errout_str());
     }
 
     void oppositeInnerConditionPointers() {
@@ -2684,6 +2732,22 @@ private:
         ASSERT_EQUALS("", errout_str());
     }
 
+    void oppositeInnerConditionLambda() {
+        check("void f() {\n" // #13728
+              "    for (int i = 0; i < 2;) {\n"
+              "        auto inc = [&]() {\n"
+              "            if (i >= 2)\n"
+              "                throw 0;\n"
+              "            return i++;\n"
+              "        };\n"
+              "        inc();\n"
+              "        inc();\n"
+              "        inc();\n"
+              "    }\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+    }
+
     void identicalInnerCondition() {
         check("void f1(int a, int b) { if(a==b) if(a==b) {}}");
         ASSERT_EQUALS("[test.cpp:1] -> [test.cpp:1]: (warning) Identical inner 'if' condition is always true.\n", errout_str());
@@ -2741,6 +2805,18 @@ private:
               "        if ((value >> 28) & 1) {}\n"
               "    }\n"
               "}");
+        ASSERT_EQUALS("", errout_str());
+
+        checkP("#define TYPE_1 \"a\"\n" // #13202
+               "#define TYPE_2 \"b\"\n"
+               "#define TYPE_3 \"c\"\n"
+               "void f(const std::string& s) {\n"
+               "    if (s == TYPE_1) {}\n"
+               "    else if (s == TYPE_2 || s == TYPE_3) {\n"
+               "        if (s == TYPE_2) {}\n"
+               "        else if (s == TYPE_3) {}\n"
+               "    }\n"
+               "}");
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -3083,10 +3159,10 @@ private:
         check("void f() { A<x &> a; }");
         ASSERT_EQUALS("", errout_str());
 
-        check("void f() { a(x<y|z,0); }", "test.c");  // filename is c => there are never templates
+        check("void f() { a(x<y|z,0); }", dinit(CheckOptions, $.cpp = false));  // language is c => there are never templates
         ASSERT_EQUALS("[test.c:1]: (style) Boolean result is used in bitwise operation. Clarify expression with parentheses.\n", errout_str());
 
-        check("class A<B&,C>;", "test.cpp");
+        check("class A<B&,C>;");
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n"
@@ -4407,9 +4483,10 @@ private:
               "    float f = 9.9f;\n"
               "    if(f < 10) {}\n"
               "}\n");
-        ASSERT_EQUALS("[test.cpp:3]: (style) Condition 'i>9.9' is always true\n"
-                      "[test.cpp:5]: (style) Condition 'f<10' is always true\n",
-                      errout_str());
+        ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'i>9.9' is always true\n"
+            "[test.cpp:5]: (style) Condition 'f<10' is always true\n",
+            errout_str());
         check("constexpr int f() {\n" // #11238
               "    return 1;\n"
               "}\n"
@@ -4571,6 +4648,142 @@ private:
               "    if (i < 0 || i >= 20)\n"
               "        return 0;\n"
               "    return 1;\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        check("namespace S { int s{}; };\n" // #11046
+              "void f(bool b) {\n"
+              "    if (S::s) {\n"
+              "        if (b) {\n"
+              "            if (S::s) {}\n"
+              "        }\n"
+              "    }\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:5]: (style) Condition 'S::s' is always true\n", errout_str());
+
+        check("void f() {\n" // #10811
+              "    int i = 0;\n"
+              "    if ((i = g(), 1) != 0) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:3]: (style) Condition '(i=g(),1)!=0' is always true\n", errout_str());
+
+        check("void f(unsigned i) {\n"
+              "    const int a[2] = {};\n"
+              "    const int* q = a + i;\n"
+              "    if (q) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:4]: (style) Condition 'q' is always true\n", errout_str());
+
+        check("void f() {\n" // #12786
+              "    const int b[2] = {};\n"
+              "    if (b) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:3]: (style) Condition 'b' is always true\n", errout_str());
+
+        check("void f(int i) {\n"
+              "    int j = 0;\n"
+              "    switch (i) {\n"
+              "    case 1:\n"
+              "        j = 0;\n"
+              "        break;\n"
+              "    default:\n"
+              "        j = 1;\n"
+              "    }\n"
+              "    if (j != 0) {}\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        check("void f() {\n"
+              "    const char *s1 = foo();\n"
+              "    const char *s2 = bar();\n"
+              "    if (s2 == NULL)\n"
+              "        return;\n"
+              "    size_t len = s2 - s1;\n"
+              "    if (len == 0)\n"
+              "        return;\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        check("int h();\n" // #12858
+              "bool g() {\n"
+              "    bool b{};\n"
+              "    try {\n"
+              "        int x = h();\n"
+              "        switch (x) {\n"
+              "        default:\n"
+              "            b = true;\n"
+              "        }\n"
+              "    }\n"
+              "    catch (...) {\n"
+              "        b = false;\n"
+              "    }\n"
+              "    return b;\n"
+              "}\n"
+              "void f() {\n"
+              "    if (g()) {}\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        check("int f(int x, int y) {\n" // #11822
+              "    if (x) {\n"
+              "        switch (y) {\n"
+              "        case 1:\n"
+              "            return 7;\n"
+              "        }\n"
+              "    }\n"
+              " \n"
+              "    if (y)\n"
+              "        return 8;\n"
+              " \n"
+              "    if (x)\n"
+              "        return 9;\n"
+              " \n"
+              "    return 0;\n"
+              "}");
+        ASSERT_EQUALS("", errout_str());
+
+        check("int g();\n" // #10561
+              "bool h();\n"
+              "int f() {\n"
+              "    bool b = false;\n"
+              "    try {\n"
+              "        switch (g()) {\n"
+              "        default:\n"
+              "            b = h();\n"
+              "        }\n"
+              "    }\n"
+              "    catch (...) {}\n"
+              "    return b ? 1 : 0;\n"
+              "}");
+        ASSERT_EQUALS("", errout_str());
+
+        check("struct S {\n"
+              "    const S* get2() const {\n"
+              "        if (mS)\n"
+              "            return mS;\n"
+              "        return this;\n"
+              "    }\n"
+              "    S* mS = nullptr;\n"
+              "};\n"
+              "void f2() {\n"
+              "    const S s;\n"
+              "    const S* sp2 = s.get2();\n"
+              "    if (sp2) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:12]: (style) Condition 'sp2' is always true\n", errout_str());
+
+        check("struct S {\n"
+              "    void f(int i);\n"
+              "    bool g() const { return !m.empty(); }\n"
+              "    std::set<int> m;\n"
+              "};\n"
+              "void S::f(int i) {\n"
+              "    bool b = g();\n"
+              "    auto it = m.find(i);\n"
+              "    if (it != m.end()) {\n"
+              "        m.erase(it);\n"
+              "        if (g() != b) {}\n"
+              "    }\n"
               "}\n");
         ASSERT_EQUALS("", errout_str());
     }
@@ -4771,6 +4984,39 @@ private:
               "        else if (i > n) {}\n"
               "        else {}\n"
               "    }\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        // #12681
+        check("void f(unsigned u) {\n"
+              "      if (u > 0) {\n"
+              "             u--;\n"
+              "             if (u == 0) {}\n"
+              "      }\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        check("void f(unsigned u) {\n"
+              "      if (u < 0xFFFFFFFF) {\n"
+              "             u++;\n"
+              "             if (u == 0xFFFFFFFF) {}\n"
+              "      }\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        check("void f(bool a, bool b) {\n" // #12937
+              "    bool c = !a && b;\n"
+              "    if (a) {}\n"
+              "    else {\n"
+              "        if (c) {}\n"
+              "    }\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        check("void f(unsigned x) {\n" // #13522
+              "    unsigned u = x;\n"
+              "    int i = u - 0;\n"
+              "    if (i < 0) {}\n"
               "}\n");
         ASSERT_EQUALS("", errout_str());
     }
@@ -4987,6 +5233,22 @@ private:
         check("void f(int i) {\n" // #12039
               "    if ((128 + i < 255 ? 128 + i : 255) > 0) {}\n"
               "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        check("struct S {\n" // #12727
+              "    bool f() const {\n"
+              "        return g() > 0;\n"
+              "    }\n"
+              "    std::size_t g() const {\n"
+              "        return 5 - h();\n"
+              "    }\n"
+              "    std::size_t h() const {\n"
+              "        if (x > 7)\n"
+              "            return 5;\n"
+              "        return (5 + x) % 5;\n"
+              "    }\n"
+              "    std::size_t x;\n"
+              "};\n");
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -5263,6 +5525,17 @@ private:
               "    for (int i = 1000; i < 20; ++i) {}\n"
               "}\n");
         ASSERT_EQUALS("[test.cpp:2]: (style) Condition 'i<20' is always false\n", errout_str());
+
+        check("int foo(int foo, int bar, bool baz, bool flag) {\n"
+              "    if (baz && flag) {\n"
+              "        do {\n"
+              "            if (bar==42)\n"
+              "                return 0;\n"
+              "        } while (flag);\n"
+              "    }\n"
+              "    return foo;\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:6]: (style) Condition 'flag' is always true\n", errout_str());
     }
 
     void alwaysTrueTryCatch()
@@ -5547,6 +5820,21 @@ private:
               "}\n");
         ASSERT_EQUALS("[test.cpp:4] -> [test.cpp:6]: (style) The if condition is the same as the previous if condition\n", errout_str());
 
+        check("void f(double d) {\n" // #12712
+              "    if (std::isfinite(d)) {}\n"
+              "    if (std::isfinite(d)) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:2] -> [test.cpp:3]: (style) The if condition is the same as the previous if condition\n", errout_str());
+
+        check("struct S { int x; };\n" // #12391
+              "int f(const struct S* a, const struct S* b) {\n"
+              "    const struct S* p = b;\n"
+              "    if (a->x < p->x) p++;\n"
+              "    if (a->x < p->x) p++;\n"
+              "    return p->x;\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+
         // do not crash
         check("void assign(const MMA& other) {\n"
               "    if (mPA.cols != other.mPA.cols || mPA.rows != other.mPA.rows)\n"
@@ -5554,6 +5842,14 @@ private:
               "    if (other.mPA.cols > 0 && other.mPA.rows > 0)\n"
               "        ;\n"
               "}");
+        ASSERT_EQUALS("", errout_str());
+
+        check("void foo() {\n" // #11202
+              "    float f = 0x1.4p+3;\n"
+              "    if (f > 10.0) {}\n"
+              "    if (f < 10.0) {}\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
     }
 
     void checkInvalidTestForOverflow() {
@@ -5834,65 +6130,65 @@ private:
 
         check("void f(unsigned char c) {\n"
               "  if (c == 256) {}\n"
-              "}", settingsUnix64);
+              "}", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("[test.cpp:2]: (style) Comparing expression of type 'unsigned char' against value 256. Condition is always false.\n", errout_str());
 
         check("void f(unsigned char* b, int i) {\n" // #6372
               "  if (b[i] == 256) {}\n"
-              "}", settingsUnix64);
+              "}", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("[test.cpp:2]: (style) Comparing expression of type 'unsigned char' against value 256. Condition is always false.\n", errout_str());
 
         check("void f(unsigned char c) {\n"
               "  if (c == 255) {}\n"
-              "}", settingsUnix64);
+              "}", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("", errout_str());
 
         check("void f(bool b) {\n"
               "  if (b == true) {}\n"
-              "}", settingsUnix64);
+              "}", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("", errout_str());
 
         // #10372
         check("void f(signed char x) {\n"
               "  if (x == 0xff) {}\n"
-              "}", settingsUnix64);
+              "}", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("[test.cpp:2]: (style) Comparing expression of type 'signed char' against value 255. Condition is always false.\n", errout_str());
 
         check("void f(short x) {\n"
               "  if (x == 0xffff) {}\n"
-              "}", settingsUnix64);
+              "}", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("[test.cpp:2]: (style) Comparing expression of type 'signed short' against value 65535. Condition is always false.\n", errout_str());
 
         check("void f(int x) {\n"
               "  if (x == 0xffffffff) {}\n"
-              "}", settingsUnix64);
+              "}", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("", errout_str());
 
         check("void f(long x) {\n"
               "  if (x == ~0L) {}\n"
-              "}", settingsUnix64);
+              "}", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("", errout_str());
 
         check("void f(long long x) {\n"
               "  if (x == ~0LL) {}\n"
-              "}", settingsUnix64);
+              "}", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("", errout_str());
 
         check("int f(int x) {\n"
               "    const int i = 0xFFFFFFFF;\n"
               "    if (x == i) {}\n"
-              "}", settingsUnix64);
+              "}", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("", errout_str());
 
         check("void f() {\n"
               "  char c;\n"
               "  if ((c = foo()) != -1) {}\n"
-              "}", settingsUnix64);
+              "}", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("", errout_str());
 
         check("void f(int x) {\n"
               "  if (x < 3000000000) {}\n"
-              "}", settingsUnix64);
+              "}", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("[test.cpp:2]: (style) Comparing expression of type 'signed int' against value 3000000000. Condition is always true.\n", errout_str());
 
         check("void f(const signed char i) {\n" // #8545
@@ -5902,7 +6198,7 @@ private:
               "    if (i <  +128) {}\n" // warn
               "    if (i <= +127) {}\n" // warn
               "    if (i <= +126) {}\n"
-              "}\n", settingsUnix64);
+              "}\n", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("[test.cpp:2]: (style) Comparing expression of type 'const signed char' against value -129. Condition is always true.\n"
                       "[test.cpp:3]: (style) Comparing expression of type 'const signed char' against value -128. Condition is always true.\n"
                       "[test.cpp:5]: (style) Comparing expression of type 'const signed char' against value 128. Condition is always true.\n"
@@ -5926,7 +6222,7 @@ private:
               "    if (255 >  u) {}\n"
               "    if (255 <= u) {}\n"
               "    if (255 >= u) {}\n" // warn
-              "}\n", settingsUnix64);
+              "}\n", dinit(CheckOptions, $.s = &settingsUnix64));
         ASSERT_EQUALS("[test.cpp:3]: (style) Comparing expression of type 'const unsigned char' against value 0. Condition is always false.\n"
                       "[test.cpp:4]: (style) Comparing expression of type 'const unsigned char' against value 0. Condition is always true.\n"
                       "[test.cpp:6]: (style) Comparing expression of type 'const unsigned char' against value 255. Condition is always false.\n"
@@ -5938,9 +6234,23 @@ private:
                       errout_str());
     }
 
-    void knownConditionCast() { // #9976
-        check("void f(int i) {\n"
+    void knownConditionCast() {
+        check("void f(int i) {\n" // #9976
               "    if (i < 0 || (unsigned)i > 5) {}\n"
+              "}\n");
+        ASSERT_EQUALS("", errout_str());
+
+        check("struct B {\n" // #12941
+              "    virtual void f();\n"
+              "};\n"
+              "struct One : public B {};\n"
+              "struct Two : public B {};\n"
+              "void g(const B& b) {\n"
+              "    const Two* two = nullptr;\n"
+              "    const One* one = dynamic_cast<const One*>(&b);\n"
+              "    if (one == nullptr)\n"
+              "        two = dynamic_cast<const Two*>(&b);\n"
+              "    if (two) {}\n"
               "}\n");
         ASSERT_EQUALS("", errout_str());
     }
@@ -5984,6 +6294,195 @@ private:
             "};"
             );
         ASSERT_EQUALS("[test.cpp:13] -> [test.cpp:18]: (style) Condition 'mS.b' is always false\n", errout_str());
+    }
+
+    void knownConditionIncDecOperator() {
+        check(
+            "void f() {\n"
+            "    unsigned int d = 0;\n"
+            "    for (int i = 0; i < 4; ++i) {\n"
+            "        if (i < 3)\n"
+            "            ++d;\n"
+            "        else if (--d == 0)\n"
+            "            ;\n"
+            "    }\n"
+            "}\n");
+        ASSERT_EQUALS("", errout_str());
+    }
+
+    void knownConditionFloating() {
+        check("void foo() {\n"   // #11199
+              "    float f = 1.0;\n"
+              "    if (f > 1.0f) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:3]: (style) Condition 'f>1.0f' is always false\n", errout_str());
+
+        check("void foo() {\n"     // #11199
+              "    float f = 1.0;\n"
+              "    if (f > 1.0L) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:3]: (style) Condition 'f>1.0L' is always false\n", errout_str());
+
+        check("void foo() {\n"   // #11199
+              "    float f = 1.0f;\n"
+              "    if (f > 1.0) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:3]: (style) Condition 'f>1.0' is always false\n", errout_str());
+
+        check("void foo() {\n"     // #11199
+              "    float f = 1.0f;\n"
+              "    if (f > 1.0L) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:3]: (style) Condition 'f>1.0L' is always false\n", errout_str());
+
+        check("void foo() {\n"     // #11199
+              "    float f = 1.0L;\n"
+              "    if (f > 1.0) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:3]: (style) Condition 'f>1.0' is always false\n", errout_str());
+
+        check("void foo() {\n"     // #11199
+              "    float f = 1.0L;\n"
+              "    if (f > 1.0f) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:3]: (style) Condition 'f>1.0f' is always false\n", errout_str());
+
+        check("void foo() {\n"   // #11201
+              "    float f = 0x1.4p+3;\n" // hex fraction 1.4 (decimal 1.25) scaled by 2^3, that is 10.0
+              "    if (f > 9.9) {}\n"
+              "    if (f < 9.9) {}\n"
+              "}\n");
+        ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'f>9.9' is always true\n"
+            "[test.cpp:4]: (style) Condition 'f<9.9' is always false\n",
+            errout_str());
+
+        check("void foo() {\n" // #12330
+              "    double d = 1.0;\n"
+              "    if (d < 0.0) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:3]: (style) Condition 'd<0.0' is always false\n", errout_str());
+
+        check("void foo() {\n"     // #12330
+              "    long double ld = 1.0;\n"
+              "    if (ld < 0.0) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:3]: (style) Condition 'ld<0.0' is always false\n", errout_str());
+
+        check("void foo() {\n"     // #12330
+              "    float f = 1.0;\n"
+              "    if (f < 0.0) {}\n"
+              "}\n");
+        ASSERT_EQUALS("[test.cpp:3]: (style) Condition 'f<0.0' is always false\n", errout_str());
+
+        check("void foo() {\n"     // #12774
+              "    float f = 1.0f;\n"
+              "    if (f > 1.01f) {}\n"
+              "}\n");
+        ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'f>1.01f' is always false\n",
+            errout_str());
+
+        check("void foo() {\n"     // #12774
+              "    float f = 1.0;\n"
+              "    if (f > 1.01) {}\n"
+              "}\n");
+        ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'f>1.01' is always false\n",
+            errout_str());
+
+        check("void foo() {\n"
+              "    float f = 1.0f;\n"
+              "    if (f > 1) {}\n"
+              "}\n");
+        ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'f>1' is always false\n",
+            errout_str());
+
+        check("void foo() {\n" // #13508
+              "    float f = 1.0f;\n"
+              "    if (f > 1.00f) {}\n"
+              "}\n");
+        TODO_ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'f>1.00f' is always false\n",
+            "",
+            errout_str());
+
+        check("void foo() {\n"
+              "    float f = 1.0;\n"
+              "    if (f > 1) {}\n"
+              "}\n");
+        ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'f>1' is always false\n",
+            errout_str());
+
+        check("void foo() {\n"// #13508
+              "    float f = 1.0;\n"
+              "    if (f > 1.00) {}\n"
+              "}\n");
+        TODO_ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'f>1.00' is always false\n",
+            "",
+            errout_str());
+
+        check("void foo() {\n" // #13506
+              "    float nf = -1.0;\n"
+              "    if (nf > +1.0) {}\n"
+              "}\n");
+        ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'nf>+1.0' is always false\n",
+            errout_str());
+
+        check("void foo() {\n" // #11200
+              "    float f = 1.0;\n"
+              "    if (f > -1.0) {}\n"
+              "}\n");
+        ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'f>-1.0' is always true\n",
+            errout_str());
+
+        check("void foo() {\n" // #13508
+              "    float f = 1.0;\n"
+              "    if (f > 1.0) {}\n"
+              "}\n");
+        TODO_ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'f>1.0' is always true\n",
+            "",
+            errout_str());
+
+        check("void foo() {\n" // #11200
+              "    float pf = +1.0;\n"
+              "    if (pf > -1.0) {}\n"
+              "}\n");
+        ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'pf>-1.0' is always true\n",
+            errout_str());
+
+        check("void foo() {\n" // #13508
+              "    float pf = +1.0;\n"
+              "    if (pf > 1.0) {}\n"
+              "}\n");
+        TODO_ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'pf>1.0' is always true\n",
+            "",
+            errout_str());
+
+        check("void foo() {\n" // #11200
+              "    float nf = -1.0;\n"
+              "    if (nf > 1.0) {}\n"
+              "}\n");
+        ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'nf>1.0' is always false\n",
+            errout_str());
+
+        check("void foo() {\n" // / #13508
+              "    float nf = -1.0;\n"
+              "    if (nf > -1.0) {}\n"
+              "}\n");
+        TODO_ASSERT_EQUALS(
+            "[test.cpp:3]: (style) Condition 'nf>-1.0' is always false\n",
+            "",
+            errout_str());
     }
 };
 

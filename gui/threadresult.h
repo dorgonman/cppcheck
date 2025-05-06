@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2023 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -54,7 +54,7 @@ public:
      */
     QString getNextFile();
 
-    FileSettings getNextFileSettings();
+    void getNextFileSettings(const FileSettings*& fs);
 
     /**
      * @brief Set list of files to check
@@ -137,6 +137,7 @@ protected:
     QStringList mFiles;
 
     std::list<FileSettings> mFileSettings;
+    std::list<FileSettings>::const_iterator mItNextFileSettings;
 
     /**
      * @brief Max progress

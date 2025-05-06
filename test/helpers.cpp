@@ -20,6 +20,7 @@
 
 #include "filelister.h"
 #include "filesettings.h"
+#include "library.h"
 #include "path.h"
 #include "pathmatch.h"
 #include "preprocessor.h"
@@ -42,6 +43,8 @@
 #endif
 
 #include <simplecpp.h>
+
+#include "xml.h"
 
 class SuppressionList;
 
@@ -136,9 +139,8 @@ std::map<std::string, std::string> PreprocessorHelper::getcode(const Settings& s
     Preprocessor preprocessor(settings, errorlogger);
     if (inlineSuppression)
         preprocessor.inlineSuppressions(tokens, *inlineSuppression);
-    tokens.removeComments();
-    preprocessor.simplifyPragmaAsm(&tokens);
-    preprocessor.removeComments();
+    preprocessor.removeComments(tokens);
+    preprocessor.simplifyPragmaAsm(tokens);
 
     preprocessor.reportOutput(outputList, true);
 
@@ -160,25 +162,38 @@ std::map<std::string, std::string> PreprocessorHelper::getcode(const Settings& s
     return cfgcode;
 }
 
-void PreprocessorHelper::preprocess(const char code[], std::vector<std::string> &files, Tokenizer& tokenizer, ErrorLogger& errorlogger)
+void SimpleTokenizer2::preprocess(const char code[], std::vector<std::string> &files, const std::string& file0, Tokenizer& tokenizer, ErrorLogger& errorlogger)
 {
-    preprocess(code, files, tokenizer, errorlogger, simplecpp::DUI());
-}
-
-void PreprocessorHelper::preprocess(const char code[], std::vector<std::string> &files, Tokenizer& tokenizer, ErrorLogger& errorlogger, const simplecpp::DUI& dui)
-{
+    // TODO: get rid of stream
     std::istringstream istr(code);
-    const simplecpp::TokenList tokens1(istr, files, files[0]);
+    const simplecpp::TokenList tokens1(istr, files, file0);
 
-    // Preprocess..
-    simplecpp::TokenList tokens2(files);
-    std::map<std::string, simplecpp::TokenList*> filedata;
-    simplecpp::preprocess(tokens2, tokens1, files, filedata, dui);
+    Preprocessor preprocessor(tokenizer.getSettings(), errorlogger);
+    simplecpp::TokenList tokens2 = preprocessor.preprocess(tokens1, "", files, true);
 
     // Tokenizer..
     tokenizer.list.createTokens(std::move(tokens2));
 
-    const Preprocessor preprocessor(tokenizer.getSettings(), errorlogger);
     std::list<Directive> directives = preprocessor.createDirectives(tokens1);
     tokenizer.setDirectives(std::move(directives));
+}
+
+bool LibraryHelper::loadxmldata(Library &lib, const char xmldata[], std::size_t len)
+{
+    tinyxml2::XMLDocument doc;
+    return (tinyxml2::XML_SUCCESS == doc.Parse(xmldata, len)) && (lib.load(doc).errorcode == Library::ErrorCode::OK);
+}
+
+bool LibraryHelper::loadxmldata(Library &lib, Library::Error& liberr, const char xmldata[], std::size_t len)
+{
+    tinyxml2::XMLDocument doc;
+    if (tinyxml2::XML_SUCCESS != doc.Parse(xmldata, len))
+        return false;
+    liberr = lib.load(doc);
+    return true;
+}
+
+Library::Error LibraryHelper::loadxmldoc(Library &lib, const tinyxml2::XMLDocument& doc)
+{
+    return lib.load(doc);
 }

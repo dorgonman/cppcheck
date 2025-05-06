@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
 #include "settings.h"
 #include "token.h"
 
+#include <cstddef>
 #include <list>
 #include <string>
 
@@ -253,6 +254,7 @@ private:
         TEST_CASE(garbageCode225);
         TEST_CASE(garbageCode226);
         TEST_CASE(garbageCode227);
+        TEST_CASE(garbageCode228);
 
         TEST_CASE(garbageCodeFuzzerClientMode1); // test cases created with the fuzzer client, mode 1
 
@@ -270,33 +272,36 @@ private:
         TEST_CASE(nonGarbageCode1); // #8346
     }
 
-#define checkCodeInternal(code, filename) checkCodeInternal_(code, filename, __FILE__, __LINE__)
-    std::string checkCode(const char code[], bool cpp = true) {
+#define checkCodeInternal(...) checkCodeInternal_(__FILE__, __LINE__, __VA_ARGS__)
+    template<size_t size>
+    std::string checkCode(const char (&code)[size], bool cpp = true) {
         // double the tests - run each example as C as well as C++
 
         // run alternate check first. It should only ensure stability - so we catch exceptions here.
         try {
-            checkCodeInternal(code, !cpp);
+            (void)checkCodeInternal(code, !cpp);
         } catch (const InternalError&) {}
 
         return checkCodeInternal(code, cpp);
     }
 
-    std::string checkCodeInternal_(const char code[], bool cpp, const char* file, int line) {
+    template<size_t size>
+    std::string checkCodeInternal_(const char* file, int line, const char (&code)[size], bool cpp) {
         // tokenize..
-        SimpleTokenizer tokenizer(settings, *this);
-        ASSERT_LOC(tokenizer.tokenize(code, cpp), file, line);
+        SimpleTokenizer tokenizer(settings, *this, cpp);
+        ASSERT_LOC(tokenizer.tokenize(code), file, line);
 
         // call all "runChecks" in all registered Check classes
-        for (std::list<Check *>::const_iterator it = Check::instances().cbegin(); it != Check::instances().cend(); ++it) {
+        for (auto it = Check::instances().cbegin(); it != Check::instances().cend(); ++it) {
             (*it)->runChecks(tokenizer, this);
         }
 
         return tokenizer.tokens()->stringifyList(false, false, false, true, false, nullptr, nullptr);
     }
 
-#define getSyntaxError(code) getSyntaxError_(code, __FILE__, __LINE__)
-    std::string getSyntaxError_(const char code[], const char* file, int line) {
+#define getSyntaxError(...) getSyntaxError_(__FILE__, __LINE__, __VA_ARGS__)
+    template<size_t size>
+    std::string getSyntaxError_(const char* file, int line, const char (&code)[size]) {
         SimpleTokenizer tokenizer(settings, *this);
         try {
             ASSERT_LOC(tokenizer.tokenize(code), file, line);
@@ -391,8 +396,8 @@ private:
         const char code[] = "class x y { };";
 
         {
-            SimpleTokenizer tokenizer(settings, *this);
-            ASSERT(tokenizer.tokenize(code, false));
+            SimpleTokenizer tokenizer(settings, *this, false);
+            ASSERT(tokenizer.tokenize(code));
             ASSERT_EQUALS("", errout_str());
         }
         {
@@ -431,7 +436,7 @@ private:
     }
 
     void garbageCode1() {
-        checkCode("struct x foo_t; foo_t typedef y;");
+        (void)checkCode("struct x foo_t; foo_t typedef y;");
     }
 
     void garbageCode2() { //#4300 (segmentation fault)
@@ -446,7 +451,7 @@ private:
         ASSERT_THROW_INTERNAL(checkCode("void f ( ) { = a ; if ( 1 ) if = ( 0 ) ; }"), SYNTAX);
     }
 
-    void garbageCode5() { // #5168
+    void garbageCode5() { // #5168 (segmentation fault)
         ASSERT_THROW_INTERNAL(checkCode("( asm : ; void : );"), SYNTAX);
     }
 
@@ -481,20 +486,20 @@ private:
     }
 
     void garbageCode12() { // do not crash
-        checkCode("{ g; S (void) { struct } { } int &g; }");
+        (void)checkCode("{ g; S (void) { struct } { } int &g; }");
         ignore_errout(); // we do not care about the output
     }
 
-    void garbageCode13() {
-        checkCode("struct C {} {} x");
+    void garbageCode13() { // Ticket #2607 - crash
+        (void)checkCode("struct C {} {} x");
     }
 
     void garbageCode15() { // Ticket #5203
         ASSERT_THROW_INTERNAL(checkCode("int f ( int* r ) { {  int s[2] ; f ( s ) ; if ( ) } }"), SYNTAX);
     }
 
-    void garbageCode16() {
-        checkCode("{ } A() { delete }"); // #6080
+    void garbageCode16() { // #6080 (segmentation fault)
+        (void)checkCode("{ } A() { delete }"); // #6080
         ignore_errout(); // we do not care about the output
     }
 
@@ -534,12 +539,12 @@ private:
 
     void garbageCode23() {
         //garbage code : don't crash (#3481)
-        ASSERT_THROW_EQUALS(checkCode("{\n"
-                                      "    if (1) = x\n"
-                                      "    else abort s[2]\n"
-                                      "}"),
-                            InternalError,
-                            "syntax error");
+        ASSERT_THROW_INTERNAL_EQUALS(checkCode("{\n"
+                                               "    if (1) = x\n"
+                                               "    else abort s[2]\n"
+                                               "}"),
+                                     SYNTAX,
+                                     "syntax error");
     }
 
     void garbageCode24() {
@@ -581,20 +586,20 @@ private:
                                         "}"), SYNTAX);
     }
 
-    void garbageCode28() {
+    void garbageCode28() { // #5702 (segmentation fault)
         // 5702
-        checkCode("struct R1 {\n"
-                  "  int a;\n"
-                  "  R1 () : a { }\n"
-                  "};");
+        (void)checkCode("struct R1 {\n"
+                        "  int a;\n"
+                        "  R1 () : a { }\n"
+                        "};");
         ignore_errout(); // we do not care about the output
     }
 
     void garbageCode30() {
         // simply survive - a syntax error would be even better (#5867)
-        checkCode("void f(int x) {\n"
-                  " x = 42\n"
-                  "}");
+        (void)checkCode("void f(int x) {\n"
+                        " x = 42\n"
+                        "}");
         ignore_errout(); // we do not care about the output
     }
 
@@ -602,8 +607,8 @@ private:
         ASSERT_THROW_INTERNAL(checkCode("typedef struct{}x[([],)]typedef e y;(y,x 0){}"), SYNTAX);
     }
 
-    void garbageCode33() { // #6613
-        checkCode("main(()B{});");
+    void garbageCode33() { // #6613 (segmentation fault)
+        (void)checkCode("main(()B{});");
     }
 
     // Bug #6626 crash: Token::astOperand2() const ( do while )
@@ -631,30 +636,30 @@ private:
 
     void garbageCode37() {
         // #5166 segmentation fault (invalid code) in lib/checkother.cpp:329 ( void * f { } void b ( ) { * f } )
-        checkCode("void * f { } void b ( ) { * f }");
+        (void)checkCode("void * f { } void b ( ) { * f }");
         ignore_errout(); // we do not care about the output
     }
 
-    void garbageCode38() { // Ticket #6666
-        checkCode("{ f2 { } } void f3 () { delete[] } { }");
+    void garbageCode38() { // Ticket #6666 (segmentation fault)
+        (void)checkCode("{ f2 { } } void f3 () { delete[] } { }");
         ignore_errout(); // we do not care about the output
     }
 
-    void garbageCode40() { // #6620
-        checkCode("{ ( ) () { virtual } ; { } E } A { : { } ( ) } * const ( ) const { }");
+    void garbageCode40() { // #6620 (segmentation fault)
+        (void)checkCode("{ ( ) () { virtual } ; { } E } A { : { } ( ) } * const ( ) const { }");
         // test doesn't seem to work on any platform: ASSERT_THROW(checkCode("{ ( ) () { virtual } ; { } E } A { : { } ( ) } * const ( ) const { }", "test.c"), InternalError);
     }
 
-    void garbageCode41() { // #6685
-        checkCode(" { } { return } *malloc(__SIZE_TYPE__ size); *memcpy(void n); static * const () { memcpy (*slot, 3); } { (); } { }");
+    void garbageCode41() { // #6685 (segmentation fault)
+        (void)checkCode(" { } { return } *malloc(__SIZE_TYPE__ size); *memcpy(void n); static * const () { memcpy (*slot, 3); } { (); } { }");
     }
 
-    void garbageCode42() { // #5760
-        checkCode("{  } * const ( ) { }");
+    void garbageCode42() { // #5760 (segmentation fault)
+        (void)checkCode("{  } * const ( ) { }");
     }
 
-    void garbageCode43() { // #6703
-        checkCode("int { }; struct A<void> a = { }");
+    void garbageCode43() { // #6703 (segmentation fault)
+        (void)checkCode("int { }; struct A<void> a = { }");
     }
 
     void garbageCode44() { // #6704
@@ -665,18 +670,17 @@ private:
         ASSERT_THROW_INTERNAL(checkCode("struct true template < > { = } > struct Types \"s\" ; static_assert < int > ;"), SYNTAX);
     }
 
-    void garbageCode46() { // #6705
-        checkCode(" { bar(char *x); void foo (int ...) { struct } va_list ap; va_start(ap, size); va_arg(ap, (d)); }");
+    void garbageCode46() { // #6705 (segmentation fault)
+        (void)checkCode(" { bar(char *x); void foo (int ...) { struct } va_list ap; va_start(ap, size); va_arg(ap, (d)); }");
         ignore_errout(); // we do not care about the output
     }
 
-    void garbageCode47() { // #6706
-        checkCode(" { { }; }; * new private: B: B;");
+    void garbageCode47() { // #6706 (segmentation fault)
+        (void)checkCode(" { { }; }; * new private: B: B;");
     }
 
-    void garbageCode48() { // #6712
-        checkCode(" { d\" ) d ...\" } int main ( ) { ( ) catch ( A a ) { { } catch ( ) \"\" } }");
-        ignore_errout(); // we do not care about the output
+    void garbageCode48() { // #6712 (segmentation fault)
+        ASSERT_THROW_INTERNAL(checkCode(" { d\" ) d ...\" } int main ( ) { ( ) catch ( A a ) { { } catch ( ) \"\" } }"), SYNTAX);
     }
 
     void garbageCode49() { // #6715
@@ -725,24 +729,24 @@ private:
     }
 
     void garbageCode63() { // #6739
-        ASSERT_THROW_INTERNAL(checkCode("{ } { } typedef int u_array[]; typedef u_array &u_array_ref; (u_array_ref arg) { } u_array_ref u_array_ref_gbl_obj0"), INTERNAL);
+        ASSERT_THROW_INTERNAL(checkCode("{ } { } typedef int u_array[]; typedef u_array &u_array_ref; (u_array_ref arg) { } u_array_ref u_array_ref_gbl_obj0"), SYNTAX);
     }
 
     void garbageCode64() { // #6740
         ASSERT_THROW_INTERNAL(checkCode("{ } foo(void (*bar)(void))"), SYNTAX);
     }
 
-    void garbageCode65() { // #6741
+    void garbageCode65() { // #6741 (segmentation fault)
         // TODO write some syntax error
-        checkCode("{ } { } typedef int u_array[]; typedef u_array &u_array_ref; (u_array_ref arg) { } u_array_ref");
+        (void)checkCode("{ } { } typedef int u_array[]; typedef u_array &u_array_ref; (u_array_ref arg) { } u_array_ref");
     }
 
     void garbageCode66() { // #6742
         ASSERT_THROW_INTERNAL(checkCode("{ { } }; { { } }; { }; class bar : public virtual"), SYNTAX);
     }
 
-    void garbageCode68() { // #6745
-        checkCode("(int a[3]); typedef void (*fp) (void); fp");
+    void garbageCode68() { // #6745 (segmentation fault)
+        (void)checkCode("(int a[3]); typedef void (*fp) (void); fp");
     }
 
     void garbageCode69() { // #6746
@@ -767,7 +771,6 @@ private:
 
     void garbageCode74() { // #6751
         ASSERT_THROW_INTERNAL(checkCode("_lenraw(const char* digits) { } typedef decltype(sizeof(0)) { } operator"), SYNTAX);
-        ignore_errout(); // we do not care about the output
     }
 
     void garbageCode76() { // #6754
@@ -807,8 +810,8 @@ private:
         ASSERT_THROW_INTERNAL(checkCode("int main ( [ ] ) { " " [ ] ; int i = 0 ; do { } ; } ( [ ] ) { }"), SYNTAX); // do not crash
     }
 
-    void garbageCode85() { // #6784
-        checkCode("{ } { } typedef void ( *VoidFunc() ) ( ) ; VoidFunc"); // do not crash
+    void garbageCode85() { // #6784 (segmentation fault)
+        (void)checkCode("{ } { } typedef void ( *VoidFunc() ) ( ) ; VoidFunc"); // do not crash
     }
 
     void garbageCode86() { // #6785
@@ -862,7 +865,7 @@ private:
         ASSERT_THROW_INTERNAL_EQUALS(checkCode("{ xs :: i(:) ! ! x/5 ! !\n"
                                                "i, :: a :: b integer, } foo2(x) :: j(:)\n"
                                                "b type(*), d(:), a x :: end d(..), foo end\n"
-                                               "foo4 b d(..), a a x type(*), b foo2 b"), INTERNAL, "Internal error. AST cyclic dependency.");
+                                               "foo4 b d(..), a a x type(*), b foo2 b"), SYNTAX, "syntax error");
     }
 
     void garbageCode100() { // #6840
@@ -876,8 +879,8 @@ private:
         ASSERT_THROW_INTERNAL(checkCode("template < class =( , ) X = 1> struct A {}; A<void> a;"), SYNTAX);
     }
 
-    void garbageCode102() { // #6846
-        checkCode("struct Object { ( ) ; Object & operator= ( Object ) { ( ) { } if ( this != & b ) } }");
+    void garbageCode102() { // #6846 (segmentation fault)
+        (void)checkCode("struct Object { ( ) ; Object & operator= ( Object ) { ( ) { } if ( this != & b ) } }");
         ignore_errout(); // we do not care about the output
     }
 
@@ -906,8 +909,7 @@ private:
     }
 
     void garbageCode109() { //  #6900 "segmentation fault (invalid code) in CheckStl::runSimplifiedChecks"
-        checkCode("( *const<> (( ) ) { } ( *const ( ) ( ) ) { } ( * const<> ( size_t )) ) { } ( * const ( ) ( ) ) { }");
-        ignore_errout(); // we do not care about the output
+        (void)checkCode("( *const<> (( ) ) { } ( *const ( ) ( ) ) { } ( * const<> ( size_t )) ) { } ( * const ( ) ( ) ) { }");
     }
 
     void garbageCode110() { //  #6902 "segmentation fault (invalid code) in CheckStl::string_c_str"
@@ -923,10 +925,10 @@ private:
     }
 
     void garbageCode114() { // #2118
-        checkCode("Q_GLOBAL_STATIC_WITH_INITIALIZER(Qt4NodeStaticData, qt4NodeStaticData, {\n"
-                  "    for (unsigned i = 0 ; i < count; i++) {\n"
-                  "    }\n"
-                  "});");
+        ASSERT_NO_THROW(checkCode("Q_GLOBAL_STATIC_WITH_INITIALIZER(Qt4NodeStaticData, qt4NodeStaticData, {\n"
+                                  "    for (unsigned i = 0 ; i < count; i++) {\n"
+                                  "    }\n"
+                                  "});"));
     }
 
     void garbageCode115() { // #5506
@@ -952,15 +954,15 @@ private:
                                         "}"), SYNTAX);
     }
 
-    void garbageCode119() { // #5598
-        checkCode("{ { void foo() { struct }; template <typename> struct S { Used x; void bar() } auto f = [this] { }; } };");
+    void garbageCode119() { // #5598 (segmentation fault)
+        (void)checkCode("{ { void foo() { struct }; template <typename> struct S { Used x; void bar() } auto f = [this] { }; } };");
         ignore_errout(); // we do not care about the output
     }
 
-    void garbageCode120() { // #4927
-        checkCode("int main() {\n"
-                  "   return 0\n"
-                  "}");
+    void garbageCode120() { // #4927 (segmentation fault)
+        (void)checkCode("int main() {\n"
+                        "   return 0\n"
+                        "}");
         ASSERT_EQUALS("", errout_str());
     }
 
@@ -970,25 +972,25 @@ private:
                                         "+?" "?="), SYNTAX);
     }
 
-    void garbageCode122() { // #6303
-        checkCode("void foo() {\n"
-                  "char *a = malloc(10);\n"
-                  "a[0]\n"
-                  "}");
+    void garbageCode122() { // #6303 (segmentation fault)
+        (void)checkCode("void foo() {\n"
+                        "char *a = malloc(10);\n"
+                        "a[0]\n"
+                        "}");
         ignore_errout(); // we do not care about the output
     }
 
     void garbageCode123() {
-        checkCode("namespace pr16989 {\n"
-                  "    class C {\n"
-                  "        C tpl_mem(T *) { return }\n"
-                  "    };\n"
-                  "}");
+        (void)checkCode("namespace pr16989 {\n"
+                        "    class C {\n"
+                        "        C tpl_mem(T *) { return }\n"
+                        "    };\n"
+                        "}");
         ignore_errout(); // we do not care about the output
     }
 
     void garbageCode125() {
-        ASSERT_THROW_INTERNAL(checkCode("{ T struct B : T valueA_AA ; } T : [ T > ( ) { B } template < T > struct A < > : ] { ( ) { return valueA_AC struct { : } } b A < int > AC ( ) a_aa.M ; ( ) ( ) }"), UNKNOWN_MACRO);
+        ASSERT_THROW_INTERNAL(checkCode("{ T struct B : T valueA_AA ; } T : [ T > ( ) { B } template < T > struct A < > : ] { ( ) { return valueA_AC struct { : } } b A < int > AC ( ) a_aa.M ; ( ) ( ) }"), SYNTAX);
         ASSERT_THROW_INTERNAL(checkCode("template < Types > struct S :{ ( S < ) S >} { ( ) { } } ( ) { return S < void > ( ) }"),
                               SYNTAX);
     }
@@ -998,16 +1000,16 @@ private:
                               SYNTAX);
     }
 
-    void garbageCode127() { // #6667
-        checkCode("extern \"C\" int printf(const char* fmt, ...);\n"
-                  "class A {\n"
-                  "public:\n"
-                  "  int Var;\n"
-                  "  A(int arg) { Var = arg; }\n"
-                  "  ~A() { printf(\"A d'tor\\n\"); }\n"
-                  "};\n"
-                  " const A& foo(const A& arg) { return arg; }\n"
-                  " foo(A(12)).Var");
+    void garbageCode127() { // #6667 (segmentation fault)
+        (void)checkCode("extern \"C\" int printf(const char* fmt, ...);\n"
+                        "class A {\n"
+                        "public:\n"
+                        "  int Var;\n"
+                        "  A(int arg) { Var = arg; }\n"
+                        "  ~A() { printf(\"A d'tor\\n\"); }\n"
+                        "};\n"
+                        " const A& foo(const A& arg) { return arg; }\n"
+                        " foo(A(12)).Var");
         ignore_errout(); // we do not care about the output
     }
 
@@ -1093,37 +1095,37 @@ private:
         ASSERT_THROW_INTERNAL(checkCode("( ) template < T1 = typename = unused> struct Args { } main ( ) { foo < int > ( ) ; }"), SYNTAX);
         ASSERT_THROW_INTERNAL(checkCode("() template < T = typename = x > struct a {} { f <int> () }"), SYNTAX);
         ASSERT_THROW_INTERNAL(checkCode("template < T = typename = > struct a { f <int> }"), SYNTAX);
-        checkCode("struct S { int i, j; }; "
-                  "template<int S::*p, typename U> struct X {}; "
-                  "X<&S::i, int> x = X<&S::i, int>(); "
-                  "X<&S::j, int> y = X<&S::j, int>();");
+        (void)checkCode("struct S { int i, j; }; "
+                        "template<int S::*p, typename U> struct X {}; "
+                        "X<&S::i, int> x = X<&S::i, int>(); "
+                        "X<&S::j, int> y = X<&S::j, int>();");
         ignore_errout(); // we are not interested in the output
-        checkCode("template <typename T> struct A {}; "
-                  "template <> struct A<void> {}; "
-                  "void foo(const void* f = 0) {}");
-        checkCode("template<typename... T> struct A { "
-                  "  static const int s = 0; "
-                  "}; "
-                  "A<int> a;");
-        checkCode("template<class T, class U> class A {}; "
-                  "template<class T = A<int, int> > class B {}; "
-                  "template<class T = B<int> > class C { "
-                  "    C() : _a(0), _b(0) {} "
-                  "    int _a, _b; "
-                  "};");
-        checkCode("template<class... T> struct A { "
-                  "  static int i; "
-                  "}; "
-                  "void f() { A<int>::i = 0; }");
+        (void)checkCode("template <typename T> struct A {}; "
+                        "template <> struct A<void> {}; "
+                        "void foo(const void* f = 0) {}");
+        (void)checkCode("template<typename... T> struct A { "
+                        "  static const int s = 0; "
+                        "}; "
+                        "A<int> a;");
+        (void)checkCode("template<class T, class U> class A {}; "
+                        "template<class T = A<int, int> > class B {}; "
+                        "template<class T = B<int> > class C { "
+                        "    C() : _a(0), _b(0) {} "
+                        "    int _a, _b; "
+                        "};");
+        (void)checkCode("template<class... T> struct A { "
+                        "  static int i; "
+                        "}; "
+                        "void f() { A<int>::i = 0; }");
         ignore_errout(); // we are not interested in the output
     }
 
-    void garbageCode135() { // #4994
-        checkCode("long f () {\n"
-                  "  return a >> extern\n"
-                  "}\n"
-                  "long a = 1 ;\n"
-                  "long b = 2 ;");
+    void garbageCode135() { // #4994 (segmentation fault)
+        (void)checkCode("long f () {\n"
+                        "  return a >> extern\n"
+                        "}\n"
+                        "long a = 1 ;\n"
+                        "long b = 2 ;");
         ignore_errout(); // we are not interested in the output
     }
 
@@ -1136,16 +1138,16 @@ private:
         ASSERT_THROW_INTERNAL(checkCode("\" \" typedef signed char f; \" \"; void a() { f * s = () &[]; (; ) (; ) }"), SYNTAX);
     }
 
-    void garbageCode138() { // #6660
-        checkCode("CS_PLUGIN_NAMESPACE_BEGIN(csparser)\n"
-                  "{\n"
-                  "    struct foo\n"
-                  "    {\n"
-                  "      union\n"
-                  "      {};\n"
-                  "    } halo;\n"
-                  "}\n"
-                  "CS_PLUGIN_NAMESPACE_END(csparser)");
+    void garbageCode138() { // #6660 (segmentation fault)
+        (void)checkCode("CS_PLUGIN_NAMESPACE_BEGIN(csparser)\n"
+                        "{\n"
+                        "    struct foo\n"
+                        "    {\n"
+                        "      union\n"
+                        "      {};\n"
+                        "    } halo;\n"
+                        "}\n"
+                        "CS_PLUGIN_NAMESPACE_END(csparser)");
         ignore_errout(); // we are not interested in the output
     }
 
@@ -1215,14 +1217,14 @@ private:
                                         "    typedef S0 b[][1][1] != 0\n"
                                         "};\n"
                                         "b[K][0] S0 b[][1][1] != 4{ 0 };\n"
-                                        "b[0][0]"), SYNTAX);
+                                        "b[0][0]"), UNKNOWN_MACRO);
     }
 
-    void garbageCode149() { // #7085
-        checkCode("int main() {\n"
-                  "    for (j = 0; j < 1; j)\n"
-                  "        j6;\n"
-                  "}");
+    void garbageCode149() { // #7085 (segmentation fault)
+        (void)checkCode("int main() {\n"
+                        "    for (j = 0; j < 1; j)\n"
+                        "        j6;\n"
+                        "}");
         ignore_errout(); // we do not care about the output
     }
 
@@ -1236,17 +1238,17 @@ private:
     }
 
     void garbageCode151() { // #4911 - bad simplification => don't crash
-        checkCode("void f() {\n"
-                  "    int a;\n"
-                  "    do { a=do_something() } while (a);\n"
-                  "}");
+        (void)checkCode("void f() {\n"
+                        "    int a;\n"
+                        "    do { a=do_something() } while (a);\n"
+                        "}");
     }
 
-    void garbageCode152() { // happened in travis, originally from llvm clang code
-        const char* code = "template <bool foo = std::value &&>\n"
-                           "static std::string foo(char *Bla) {\n"
-                           "    while (Bla[1] && Bla[1] != ',') }\n";
-        checkCode(code);
+    void garbageCode152() { // happened in travis, originally from llvm clang code (segmentation fault)
+        const char code[] = "template <bool foo = std::value &&>\n"
+                            "static std::string foo(char *Bla) {\n"
+                            "    while (Bla[1] && Bla[1] != ',') }\n";
+        (void)checkCode(code);
         ignore_errout(); // we are not interested in the output
     }
 
@@ -1254,8 +1256,8 @@ private:
         TODO_ASSERT_THROW(checkCode("enum { X = << { X } } { X X } enum { X = << { ( X ) } } { } X */"), InternalError);
     }
 
-    void garbageCode154() {
-        checkCode("\"abc\"[];");
+    void garbageCode154() { // #7112 (segmentation fault)
+        (void)checkCode("\"abc\"[];");
     }
 
     void garbageCode156() { // #7120
@@ -1270,8 +1272,8 @@ private:
                                         "template std::swap\n"), SYNTAX);
     }
 
-    void garbageCode158() { // #3238
-        checkCode("__FBSDID(\"...\");");
+    void garbageCode158() { // #3238 (segmentation fault)
+        (void)checkCode("__FBSDID(\"...\");");
     }
 
     void garbageCode159() { // #7119
@@ -1292,33 +1294,38 @@ private:
     }
 
     void garbageValueFlow() {
-        // #6089
-        const char* code = "{} int foo(struct, x1, struct x2, x3, int, x5, x6, x7)\n"
-                           "{\n"
-                           "    (foo(s, , 2, , , 5, , 7)) abort()\n"
-                           "}\n";
-        ASSERT_THROW_INTERNAL(checkCode(code), SYNTAX);
+        { // #6089
+            const char code[] = "{} int foo(struct, x1, struct x2, x3, int, x5, x6, x7)\n"
+                                "{\n"
+                                "    (foo(s, , 2, , , 5, , 7)) abort()\n"
+                                "}\n";
+            ASSERT_THROW_INTERNAL(checkCode(code), SYNTAX);
+        }
 
-        // 6122 survive garbage code
-        code = "; { int i ; for ( i = 0 ; = 123 ; ) - ; }";
-        ASSERT_THROW_INTERNAL(checkCode(code), SYNTAX);
+        { // 6122 survive garbage code
+            const char code[] = "; { int i ; for ( i = 0 ; = 123 ; ) - ; }";
+            ASSERT_THROW_INTERNAL(checkCode(code), SYNTAX);
+        }
 
-        code = "void f1() { for (int n = 0 n < 10 n++); }";
-        ASSERT_THROW_INTERNAL(checkCode(code), SYNTAX);
+        {
+            const char code[] = "void f1() { for (int n = 0 n < 10 n++); }";
+            ASSERT_THROW_INTERNAL(checkCode(code), SYNTAX);
+        }
     }
 
     void garbageSymbolDatabase() {
-        checkCode("void f( { u = 1 ; } ) { }");
+        (void)checkCode("void f( { u = 1 ; } ) { }");
 
         ASSERT_THROW_INTERNAL(checkCode("{ }; void namespace A::f; { g() { int } }"), SYNTAX);
 
         ASSERT_THROW_INTERNAL(checkCode("class Foo {}; class Bar : public Foo"), SYNTAX);
 
-        checkCode("YY_DECL { switch (yy_act) {\n"
-                  "    case 65: YY_BREAK\n"
-                  "    case YY_STATE_EOF(block):\n"
-                  "        yyterminate();\n"
-                  "} }"); // #5663
+        // #5663 (segmentation fault)
+        (void)checkCode("YY_DECL { switch (yy_act) {\n"
+                        "    case 65: YY_BREAK\n"
+                        "    case YY_STATE_EOF(block):\n"
+                        "        yyterminate();\n"
+                        "} }");
         ignore_errout(); // we are not interested in the output
     }
 
@@ -1327,17 +1334,17 @@ private:
                                         "int #define for (i = avx_test i < c[i]; i++)\n"
                                         "b[i + 3] = a[i] * {}"), SYNTAX); // Don't hang (#5787)
 
-        checkCode("START_SECTION([EXTRA](bool isValid(const String &filename)))"); // Don't crash (#5991)
+        (void)checkCode("START_SECTION([EXTRA](bool isValid(const String &filename)))"); // Don't crash (#5991)
 
         // #8352
         ASSERT_THROW_INTERNAL(checkCode("else return % name5 name2 - =name1 return enum | { - name3 1 enum != >= 1 >= ++ { { || "
-                                        "{ return return { | { - name3 1 enum != >= 1 >= ++ { name6 | ; ++}}}}}}}"), SYNTAX);
+                                        "{ return return { | { - name3 1 enum != >= 1 >= ++ { name6 | ; ++}}}}}}}"), UNKNOWN_MACRO);
         ASSERT_THROW_INTERNAL(checkCode("else return % name5 name2 - =name1 return enum | { - name3 1 enum != >= 1 >= ++ { { || "
-                                        "{ return return { | { - name3 1 enum != >= 1 >= ++ { { || ; ++}}}}}}}}"), SYNTAX);
+                                        "{ return return { | { - name3 1 enum != >= 1 >= ++ { { || ; ++}}}}}}}}"), UNKNOWN_MACRO);
     }
 
     void templateSimplifierCrashes() {
-        checkCode( // #5950
+        (void)checkCode( // #5950 (segmentation fault)
             "struct A {\n"
             "  template <class T> operator T*();\n"
             "};\n"
@@ -1359,21 +1366,21 @@ private:
             "  }\n"
             "}");
 
-        checkCode( // #6034
-            "template<template<typename...> class T, typename... Args>\n"
-            "struct foo<T<Args...> > {\n"
-            "    const bool value = true;\n"
-            "};\n"
-            "\n"
-            "template<int I>\n"
-            "struct int_\n"
-            "{};\n"
-            "\n"
-            "int main() {\n"
-            "  foo<int_<0> >::value;\n"
-            "}");
+        ASSERT_NO_THROW(checkCode( // #6034
+                            "template<template<typename...> class T, typename... Args>\n"
+                            "struct foo<T<Args...> > {\n"
+                            "    const bool value = true;\n"
+                            "};\n"
+                            "\n"
+                            "template<int I>\n"
+                            "struct int_\n"
+                            "{};\n"
+                            "\n"
+                            "int main() {\n"
+                            "  foo<int_<0> >::value;\n"
+                            "}"));
 
-        checkCode( // #6117
+        (void)checkCode( // #6117 (segmentation fault)
             "template <typename ...> struct something_like_tuple\n"
             "{};\n"
             "template <typename, typename> struct is_last {\n"
@@ -1392,7 +1399,7 @@ private:
             "SA ((is_last<int, something_like_tuple_t>::value == false));");
         ignore_errout(); // we are not interested in the output
 
-        checkCode( // #6225
+        (void)checkCode( // #6225 (use-after-free)
             "template <typename...>\n"
             "void templ_fun_with_ty_pack() {}\n"
             "\n"
@@ -1417,7 +1424,7 @@ private:
 
     void garbageCode162() {
         //7208
-        ASSERT_THROW_INTERNAL(checkCode("return <<  >>  x return <<  >>  x ", false), SYNTAX);
+        ASSERT_THROW_INTERNAL(checkCode("return <<  >>  x return <<  >>  x ", false), UNKNOWN_MACRO);
     }
 
     void garbageCode163() {
@@ -1441,8 +1448,8 @@ private:
     }
 
     void garbageCode168() {
-        // 7246
-        checkCode("long foo(void) { return *bar; }", false);
+        // #7246 (segmentation fault)
+        (void)checkCode("long foo(void) { return *bar; }", false);
         ignore_errout(); // we do not care about the output
     }
 
@@ -1485,8 +1492,8 @@ private:
                                         "}"), SYNTAX);
     }
 
-    void garbageCode176() { // #7527
-        checkCode("class t { { struct } enum class f : unsigned { q } b ; operator= ( T ) { switch ( b ) { case f::q: } } { assert ( b ) ; } } { ; & ( t ) ( f::t ) ; } ;");
+    void garbageCode176() { // #7257 (segmentation fault)
+        (void)checkCode("class t { { struct } enum class f : unsigned { q } b ; operator= ( T ) { switch ( b ) { case f::q: } } { assert ( b ) ; } } { ; & ( t ) ( f::t ) ; } ;");
         ignore_errout(); // we are not interested in the output
     }
 
@@ -1511,7 +1518,7 @@ private:
     }
 
     void garbageCode185() { // #6011 crash in libreoffice failure to create proper AST
-        checkCode(
+        (void)checkCode(
             "namespace binfilter\n"
             "{\n"
             "       BOOL EnhWMFReader::ReadEnhWMF()\n"
@@ -1532,16 +1539,16 @@ private:
         const char inp[] = "0|\0|0>;\n";
         ASSERT_THROW_INTERNAL(checkCode(inp), SYNTAX);
 
-        checkCode("template<class T> struct S : A< B<T> || C<T> > {};"); // No syntax error: #8390
-        checkCode("static_assert(A<x> || B<x>, ab);");
+        (void)checkCode("template<class T> struct S : A< B<T> || C<T> > {};"); // No syntax error: #8390
+        (void)checkCode("static_assert(A<x> || B<x>, ab);");
     }
 
     void garbageCode188() { // #8255
         ASSERT_THROW_INTERNAL(checkCode("{z r(){(){for(;<(x);){if(0==0)}}}}"), SYNTAX);
     }
 
-    void garbageCode189() { // #8317
-        checkCode("t&n(){()()[](){()}}$");
+    void garbageCode189() { // #8317 (segmentation fault)
+        (void)checkCode("t&n(){()()[](){()}}$");
     }
 
     void garbageCode190() { // #8307
@@ -1559,7 +1566,7 @@ private:
         ASSERT_THROW_INTERNAL(checkCode("struct A { int f(struct); };"), SYNTAX);
 
         // The following code is valid and should not trigger any error
-        checkCode("struct A { int f ( char ) ; } ;");
+        ASSERT_NO_THROW(checkCode("struct A { int f ( char ) ; } ;"));
     }
 
     void garbageCode192() { // #8386 (segmentation fault)
@@ -1576,14 +1583,14 @@ private:
         ASSERT_THROW_INTERNAL(checkCode("{((()))(return 1||);}"), SYNTAX);
     }
 
-    // #8709 - no garbage but to avoid stability regression
+    // #8709 - no garbage but to avoid stability regression (segmentation fault)
     void garbageCode195() {
-        checkCode("a b;\n"
-                  "void c() {\n"
-                  "  switch (d) { case b:; }\n"
-                  "  double e(b);\n"
-                  "  if(e <= 0) {}\n"
-                  "}");
+        (void)checkCode("a b;\n"
+                        "void c() {\n"
+                        "  switch (d) { case b:; }\n"
+                        "  double e(b);\n"
+                        "  if(e <= 0) {}\n"
+                        "}");
         ignore_errout(); // we do not care about the output
     }
 
@@ -1608,10 +1615,9 @@ private:
                                         "}"), SYNTAX);
     }
 
-    // #8752
+    // #8752 (segmentation fault)
     void garbageCode199() {
-        checkCode("d f(){e n00e0[]n00e0&" "0+f=0}");
-        ignore_errout(); // we do not care about the output
+        ASSERT_THROW_INTERNAL(checkCode("d f(){e n00e0[]n00e0&" "0+f=0}"), SYNTAX);
     }
 
     // #8757
@@ -1631,9 +1637,9 @@ private:
         ignore_errout();
     }
 
-    void garbageCode203() { // #8972
+    void garbageCode203() { // #8972 (segmentation fault)
         ASSERT_THROW_INTERNAL(checkCode("{ > () {} }"), SYNTAX);
-        checkCode("template <> a > ::b();");
+        (void)checkCode("template <> a > ::b();");
     }
 
     void garbageCode204() {
@@ -1662,7 +1668,7 @@ private:
 
     void garbageCode206() {
         ASSERT_EQUALS("[test.cpp:1] syntax error: operator", getSyntaxError("void foo() { for (auto operator new : int); }"));
-        ASSERT_EQUALS("[test.cpp:1] syntax error: operator", getSyntaxError("void foo() { for (a operator== :) }"));
+        ASSERT_EQUALS("[test.cpp:1] syntax error", getSyntaxError("void foo() { for (a operator== :) }"));
     }
 
     void garbageCode207() { // #8750
@@ -1693,18 +1699,18 @@ private:
         ASSERT_THROW_INTERNAL(checkCode("{\"\"[(1||)];}"), SYNTAX);
     }
 
-    void garbageCode214() {
-        checkCode("THIS FILE CONTAINS VARIOUS TEXT");
+    void garbageCode214() { // segmentation fault
+        (void)checkCode("THIS FILE CONTAINS VARIOUS TEXT");
     }
 
     void garbageCode215() { // daca@home script with extension .c
         ASSERT_THROW_INTERNAL(checkCode("a = [1,2,3];"), SYNTAX);
     }
 
-    void garbageCode216() { // #7884
-        checkCode("template<typename> struct A {};\n"
-                  "template<typename...T> struct A<T::T...> {}; \n"
-                  "A<int> a;");
+    void garbageCode216() { // #7884 (out-of-memory)
+        (void)checkCode("template<typename> struct A {};\n"
+                        "template<typename...T> struct A<T::T...> {}; \n"
+                        "A<int> a;");
     }
 
     void garbageCode217() { // #10011
@@ -1716,15 +1722,14 @@ private:
     }
 
     void garbageCode218() { // #8763
-        checkCode("d f(){t n0000 const[]n0000+0!=n0000,(0)}"); // don't crash
-        ignore_errout(); // we are not interested in the output
+        ASSERT_THROW_INTERNAL(checkCode("d f(){t n0000 const[]n0000+0!=n0000,(0)}"), SYNTAX);
     }
     void garbageCode219() { // #10101
-        checkCode("typedef void (*func) (addr) ;\n"
-                  "void bar(void) {\n"
-                  "    func f;\n"
-                  "    f & = (func)42;\n"
-                  "}\n"); // don't crash
+        (void)checkCode("typedef void (*func) (addr) ;\n"
+                        "void bar(void) {\n"
+                        "    func f;\n"
+                        "    f & = (func)42;\n"
+                        "}\n"); // don't crash
         ignore_errout(); // we are not interested in the output
     }
     void garbageCode220() { // #6832
@@ -1756,6 +1761,10 @@ private:
     }
     void garbageCode227() { // #12615
         ASSERT_NO_THROW(checkCode("f(&S::operator=);"));
+    }
+    void garbageCode228() {
+        ASSERT_NO_THROW(checkCode("void f() { enum { A = [=]() mutable { return 0; }() }; }"));
+        ASSERT_NO_THROW(checkCode("enum { A = [=](void) mutable -> int { return 0; }() };"));
     }
 
     void syntaxErrorFirstToken() {
@@ -1822,7 +1831,7 @@ private:
     void syntaxErrorFuzzerCliType1() {
         ASSERT_THROW_INTERNAL(checkCode("void f(){x=0,return return''[]()}"), SYNTAX);
         ASSERT_THROW_INTERNAL(checkCode("void f(){x='0'++'0'(return)[];}"), SYNTAX); // #9063
-        checkCode("void f(){*(int *)42=0;}"); // no syntax error
+        (void)checkCode("void f(){*(int *)42=0;}"); // no syntax error
         ignore_errout(); // we are not interested in the output
         ASSERT_THROW_INTERNAL(checkCode("void f() { x= 'x' > typedef name5 | ( , ;){ } (); }"), SYNTAX); // #9067
         ASSERT_THROW_INTERNAL(checkCode("void f() { x= {}( ) ( 'x')[ ] (); }"), SYNTAX); // #9068
@@ -1846,30 +1855,30 @@ private:
     }
 
     void nonGarbageCode1() {
-        checkCode("template <class T> class List {\n"
-                  "public:\n"
-                  "   List();\n"
-                  "   virtual ~List();\n"
-                  "   template< class Predicate > u_int DeleteIf( const Predicate &pred );\n"
-                  "};\n"
-                  "template< class T >\n"
-                  "template< class Predicate > int\n"
-                  "List<T>::DeleteIf( const Predicate &pred )\n"
-                  "{}");
+        ASSERT_NO_THROW(checkCode("template <class T> class List {\n"
+                                  "public:\n"
+                                  "   List();\n"
+                                  "   virtual ~List();\n"
+                                  "   template< class Predicate > u_int DeleteIf( const Predicate &pred );\n"
+                                  "};\n"
+                                  "template< class T >\n"
+                                  "template< class Predicate > int\n"
+                                  "List<T>::DeleteIf( const Predicate &pred )\n"
+                                  "{}"));
         ignore_errout(); // we are not interested in the output
 
         // #8749
-        checkCode(
-            "struct A {\n"
-            "    void operator+=(A&) && = delete;\n"
-            "};");
+        ASSERT_NO_THROW(checkCode(
+                            "struct A {\n"
+                            "    void operator+=(A&) && = delete;\n"
+                            "};"));
 
         // #8788
-        checkCode(
-            "struct foo;\n"
-            "void f() {\n"
-            "    auto fn = []() -> foo* { return new foo(); };\n"
-            "}");
+        ASSERT_NO_THROW(checkCode(
+                            "struct foo;\n"
+                            "void f() {\n"
+                            "    auto fn = []() -> foo* { return new foo(); };\n"
+                            "}"));
         ignore_errout(); // we do not care about the output
     }
 };

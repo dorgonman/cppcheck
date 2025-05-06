@@ -5,6 +5,8 @@
 # Create release candidate
 # ========================
 #
+# update cppcheck used in premium addon CI
+#
 # check every isPremiumEnabled call:
 # - every id should be in --errorlist
 #   git grep 'isPremiumEnabled[(]"' | sed 's/.*isPremiumEnabled[(]"//' | sed 's/".*//' | sort | uniq > ids1.txt
@@ -20,13 +22,10 @@
 #
 # self check, fix critical issues:
 # make clean && make CXXFLAGS=-O2 MATCHCOMPILER=yes -j4
-# ./cppcheck -D__CPPCHECK__ -D__GNUC__ -DCHECK_INTERNAL -DHAVE_RULES --std=c++11 --library=cppcheck-lib --library=qt --enable=style --inconclusive --inline-suppr --suppress=bitwiseOnBoolean --suppress=shadowFunction --suppress=useStlAlgorithm --suppress=*:externals/picojson.h --suppress=functionConst --suppress=functionStatic --xml cli gui/*.cpp lib 2> selfcheck.xml
+# ./cppcheck -D__CPPCHECK__ -D__GNUC__ -DCHECK_INTERNAL -DHAVE_RULES --std=c++11 --library=cppcheck-lib --library=qt --enable=style --inconclusive --inline-suppr --suppress=bitwiseOnBoolean --suppress=shadowFunction --suppress=useStlAlgorithm --suppress=*:externals/picojson.h --suppress=functionConst --suppress=functionStatic --suppress=normalCheckLevelMaxBranches --xml cli gui/*.cpp lib 2> selfcheck.xml
 #
 # Generate lib/checkers.cpp (TODO the premium checkers should not be statically coded)
 # cd ~/cppchecksolutions/cppcheck && python3 tools/get_checkers.py > lib/checkers.cpp
-#
-# Update translations
-#   lupdate gui.pro
 #
 # Update copyright year
 # git diff 2.8 -- */*.cpp */*.h | grep '^diff --git a/' | sed 's|.* b/||' | xargs sed -i 's/Copyright (C) 2007-20[12]./Copyright (C) 2007-2022/'
@@ -47,8 +46,9 @@
 #
 # Update version numbers in:
 # sed -i -r "s/version 2[.][0-9]+([.]99)*/version 2.13.0/" cli/main.cpp
-# sed -i -r "s|2[.][0-9]+([.]99)*|2.13.0|" cmake/versions.cmake # version must have 3 parts.
+# sed -i -r "s|VERSION 2[.][0-9]+[.]99|VERSION 2.13.0|" CMakeLists.txt # version must have 3 parts.
 # sed -i -r "s/CPPCHECK_MINOR_VERSION [0-9]+/CPPCHECK_MINOR_VERSION 13/" lib/version.h
+# sed -i -r "s/CPPCHECK_BUGFIX_VERSION 99/CPPCHECK_BUGFIX_VERSION 0/" lib/version.h
 # sed -i -r "s/2[.][0-9]+([.]99)*( dev)*/2.13.0/" win_installer/productInfo.wxi
 # sed -i -r "s/subtitle: Version 2\.[0-9]+.*/subtitle: Version 2.13/" man/*.md
 # Ensure that "-rc1" is added in productInfo.wxi and lib/version.h
@@ -61,8 +61,7 @@
 #
 # Update the Makefile:
 # make dmake && ./dmake --release
-# Uppdatera CI så att dmake körs med --release
-# git commit -a -m "2.8: Updated Makefile"
+# git commit -a -m "2.8: Updated Makefile [ci skip]"
 #
 # Ensure that CI is happy
 #
@@ -86,10 +85,6 @@
 #
 # Update download link on index.php main page
 #
-# Write Changelog
-# git log 2.11..2.12 > Changelog
-# <edit>
-#
 # Trac:
 # 1. Create ticket "2.12 safety cosmetic changes"
 # 2. Check priorities for all tickets in milestone. Should be: safety-*
@@ -109,10 +104,11 @@
 # 2. scp -i ~/.ssh/osuosl_id_rsa tools/donate-cpu-server.py danielmarjamaki@cppcheck1.osuosl.org:/var/daca@home/
 #
 # Backup:
-# * trac: cd /var && nice tar -cJf trac.tar.xz trac-cppcheck
+# * trac: cd /var && nice tar -cJf ~/trac.tar.xz trac-cppcheck/db/trac.db
+# * daca: cd /var && nice tar -cJf ~/daca.tar.xz daca@home
 # * git: git checkout -f && git checkout main && git pull && tar -cJf git.tar.xz .git
-# * Changelog
-# * ci status: screenshot(s) showing that all tests pass for tagged commit
+# * git log 2.16.0..2.17.0 > Changelog
+# * mkdir out && python3 ~/cppchecksolutions/release/getWorkflowAndIssueLogs.py -r danmar/cppcheck -t 2.15.0 -p out
 
 # Folder/tag to use
 folder=$1

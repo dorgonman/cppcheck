@@ -1,4 +1,4 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
  * Copyright (C) 2007-2024 Cppcheck team.
  *
@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -96,12 +97,12 @@ struct ExprIdToken {
     };
 };
 
-struct ProgramMemory {
+struct CPPCHECKLIB ProgramMemory {
     using Map = std::unordered_map<ExprIdToken, ValueFlow::Value, ExprIdToken::Hash>;
 
-    ProgramMemory() = default;
+    ProgramMemory() : mValues(new Map()) {}
 
-    explicit ProgramMemory(Map values) : mValues(std::move(values)) {}
+    explicit ProgramMemory(Map values) : mValues(new Map(std::move(values))) {}
 
     void setValue(const Token* expr, const ValueFlow::Value& value);
     const ValueFlow::Value* getValue(nonneg int exprid, bool impossible = false) const;
@@ -123,7 +124,7 @@ struct ProgramMemory {
 
     void erase_if(const std::function<bool(const ExprIdToken&)>& pred);
 
-    void swap(ProgramMemory &pm);
+    void swap(ProgramMemory &pm) NOEXCEPT;
 
     void clear();
 
@@ -131,22 +132,12 @@ struct ProgramMemory {
 
     void replace(ProgramMemory pm);
 
-    void insert(const ProgramMemory &pm);
-
-    Map::iterator begin() {
-        return mValues.begin();
-    }
-
-    Map::iterator end() {
-        return mValues.end();
-    }
-
     Map::const_iterator begin() const {
-        return mValues.begin();
+        return mValues->cbegin();
     }
 
     Map::const_iterator end() const {
-        return mValues.end();
+        return mValues->cend();
     }
 
     friend bool operator==(const ProgramMemory& x, const ProgramMemory& y) {
@@ -158,17 +149,18 @@ struct ProgramMemory {
     }
 
 private:
-    Map mValues;
+    void copyOnWrite();
+
+    std::shared_ptr<Map> mValues;
 };
 
 struct ProgramMemoryState {
     ProgramMemory state;
     std::map<nonneg int, const Token*> origins;
-    const Settings* settings;
+    const Settings& settings;
 
-    explicit ProgramMemoryState(const Settings* s);
+    explicit ProgramMemoryState(const Settings& s);
 
-    void insert(const ProgramMemory &pm, const Token* origin = nullptr);
     void replace(ProgramMemory pm, const Token* origin = nullptr);
 
     void addState(const Token* tok, const ProgramMemory::Map& vars);
@@ -186,21 +178,21 @@ void execute(const Token* expr,
              ProgramMemory& programMemory,
              MathLib::bigint* result,
              bool* error,
-             const Settings* settings);
+             const Settings& settings);
 
 /**
  * Is condition always false when variable has given value?
  * \param condition   top ast token in condition
  * \param pm   program memory
  */
-bool conditionIsFalse(const Token* condition, ProgramMemory pm, const Settings* settings);
+bool conditionIsFalse(const Token* condition, ProgramMemory pm, const Settings& settings);
 
 /**
  * Is condition always true when variable has given value?
  * \param condition   top ast token in condition
  * \param pm   program memory
  */
-bool conditionIsTrue(const Token* condition, ProgramMemory pm, const Settings* settings);
+bool conditionIsTrue(const Token* condition, ProgramMemory pm, const Settings& settings);
 
 /**
  * Get program memory by looking backwards from given token.
@@ -209,7 +201,7 @@ ProgramMemory getProgramMemory(const Token* tok, const Token* expr, const ValueF
 
 ValueFlow::Value evaluateLibraryFunction(const std::unordered_map<nonneg int, ValueFlow::Value>& args,
                                          const std::string& returnValue,
-                                         const Settings* settings,
+                                         const Settings& settings,
                                          bool cpp);
 
 #endif

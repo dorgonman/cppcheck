@@ -2,8 +2,10 @@
 import json
 import os
 import pytest
+import sys
 from testutils import cppcheck, assert_cppcheck
 
+__script_dir = os.path.dirname(os.path.abspath(__file__))
 
 def test_project_force_U(tmpdir):
     # 10018
@@ -510,6 +512,121 @@ def test_project_file_duplicate_2(tmpdir):
     assert stderr == ''
 
 
+def test_project_file_duplicate_3(tmpdir):
+    test_file_a = os.path.join(tmpdir, 'a.c')
+    with open(test_file_a, 'wt'):
+        pass
+
+    # multiple ways to specify the same file
+    in_file_a = 'a.c'
+    in_file_b = os.path.join('.', 'a.c')
+    in_file_c = os.path.join('dummy', '..', 'a.c')
+    in_file_d = os.path.join(tmpdir, 'a.c')
+    in_file_e = os.path.join(tmpdir, '.', 'a.c')
+    in_file_f = os.path.join(tmpdir, 'dummy', '..', 'a.c')
+
+    project_file = os.path.join(tmpdir, 'test.cppcheck')
+    with open(project_file, 'wt') as f:
+        f.write(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <paths>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+    </paths>
+</project>""".format(in_file_a, in_file_b, in_file_c, in_file_d, in_file_e, in_file_f, tmpdir))
+
+    args = ['--project={}'.format(project_file)]
+    args.append('-j1') # TODO: remove when fixed
+
+    exitcode, stdout, stderr = cppcheck(args, cwd=tmpdir)
+    assert exitcode == 0
+    lines = stdout.splitlines()
+    # TODO: only a single file should be checked
+    if sys.platform == 'win32':
+        assert lines == [
+            'Checking {} ...'.format(test_file_a),
+            '1/3 files checked 0% done',
+            'Checking {} ...'.format(test_file_a),
+            '2/3 files checked 0% done',
+            'Checking {} ...'.format(test_file_a),
+            '3/3 files checked 0% done'
+        ]
+    else:
+        assert lines == [
+            'Checking {} ...'.format(test_file_a),
+            '1/2 files checked 0% done',
+            'Checking {} ...'.format(test_file_a),
+            '2/2 files checked 0% done'
+        ]
+    assert stderr == ''
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason="requires Windows")
+def test_project_file_duplicate_4(tmpdir):
+    test_file_a = os.path.join(tmpdir, 'a.c')
+    with open(test_file_a, 'wt'):
+        pass
+
+    # multiple ways to specify the same file
+    in_file_a = 'a.c'
+    in_file_b = os.path.join('.', 'a.c')
+    in_file_c = os.path.join('dummy', '..', 'a.c')
+    in_file_d = os.path.join(tmpdir, 'a.c')
+    in_file_e = os.path.join(tmpdir, '.', 'a.c')
+    in_file_f = os.path.join(tmpdir, 'dummy', '..', 'a.c')
+
+    args1 = [in_file_a, in_file_b, in_file_c, in_file_d, in_file_e, in_file_f, str(tmpdir)]
+    args2 = []
+    for a in args1:
+        args2.append(a.replace('\\', '/'))
+
+    project_file = os.path.join(tmpdir, 'test.cppcheck')
+    with open(project_file, 'wt') as f:
+        f.write(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <paths>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+        <dir name="{}"/>
+    </paths>
+</project>""".format(in_file_a, in_file_b, in_file_c, in_file_d, in_file_e, in_file_f, tmpdir,
+                     args2[0], args2[1], args2[2], args2[3], args2[4], args2[5], args2[6]))
+
+    args = ['--project={}'.format(project_file)]
+    args.append('-j1') # TODO: remove when fixed
+
+    exitcode, stdout, stderr = cppcheck(args, cwd=tmpdir)
+    assert exitcode == 0
+    lines = stdout.splitlines()
+    # TODO: only a single file should be checked
+    assert lines == [
+        'Checking {} ...'.format(test_file_a),
+        '1/3 files checked 0% done',
+        'Checking {} ...'.format(test_file_a),
+        '2/3 files checked 0% done',
+        'Checking {} ...'.format(test_file_a),
+        '3/3 files checked 0% done'
+    ]
+    assert stderr == ''
+
 def test_project_file_ignore(tmpdir):
     test_file = os.path.join(tmpdir, 'test.cpp')
     with open(test_file, 'wt') as f:
@@ -588,7 +705,7 @@ def test_project_file_ignore_3(tmpdir):
     assert_cppcheck(args, ec_exp=1, err_exp=[], out_exp=out_lines)
 
 
-@pytest.mark.xfail
+@pytest.mark.xfail(strict=True)
 def test_json_file_ignore(tmpdir):
     test_file = os.path.join(tmpdir, 'test.cpp')
     with open(test_file, 'wt') as f:
@@ -634,6 +751,149 @@ def test_json_file_ignore_2(tmpdir):
     out_lines = [
         'cppcheck: error: no C or C++ source files found.',
         'cppcheck: all paths were ignored'
+    ]
+
+    assert_cppcheck(args, ec_exp=1, err_exp=[], out_exp=out_lines)
+
+
+@pytest.mark.xfail(strict=True)
+def test_project_D(tmpdir):
+    test_file = os.path.join(tmpdir, 'test.cpp')
+    with open(test_file, 'wt') as f:
+        f.write("""
+#ifndef __GNUC__
+#error "requirement not met"
+#endif
+                """)
+
+    project_file = os.path.join(tmpdir, 'test.cppcheck')
+    with open(project_file, 'wt') as f:
+        f.write(
+            """
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="1">
+  <paths>
+   <dir name="{}"/>
+  </paths>
+</project>
+            """.format(test_file))
+
+    args = [
+        '--project=' + project_file,
+        '--template=simple',
+    ]
+    arg_D = ['-D__GNUC__']
+
+    out_expected = [
+        'Checking {} ...'.format(test_file),
+        'Checking {}: __GNUC__=1...'.format(test_file)
+    ]
+
+    args1 = args + arg_D
+    ret, stdout, stderr = cppcheck(args1)
+    assert stdout.splitlines() == out_expected
+    assert stderr.splitlines() == []
+    assert ret == 0, stdout
+
+    # TODO: -D__GNUC__ is lost
+    args2 = arg_D + args
+    ret, stdout, stderr = cppcheck(args2)
+    assert stdout.splitlines() == out_expected
+    assert stderr.splitlines() == []
+    assert ret == 0, stdout
+
+
+def test_compdb_D(tmpdir):
+    test_file = os.path.join(tmpdir, 'test.cpp')
+    with open(test_file, 'wt') as f:
+        f.write("""
+#ifndef __GNUC__
+#error "requirement not met"
+#endif
+                """)
+
+    compile_commands = os.path.join(tmpdir, 'compile_commands.json')
+    compilation_db = [
+        {"directory": str(tmpdir),
+         "command": "c++ -o test.o -c test.cpp",
+         "file": "test.cpp",
+         "output": "test.o"}
+    ]
+    with open(compile_commands, 'wt') as f:
+        f.write(json.dumps(compilation_db))
+
+    args = [
+        '--project=' + compile_commands,
+        '--template=simple',
+        ]
+    arg_D = ['-D__GNUC__']
+
+    out_expected = [
+        'Checking {} ...'.format(test_file),
+        'Checking {}: __GNUC__=1;...'.format(test_file)  # TODO: get rid of extra ;
+    ]
+
+    args1 = args + arg_D
+    ret, stdout, stderr = cppcheck(args1)
+    assert stdout.splitlines() == out_expected
+    assert stderr.splitlines() == []
+    assert ret == 0, stdout
+
+    args2 = arg_D + args
+    ret, stdout, stderr = cppcheck(args2)
+    assert stdout.splitlines() == out_expected
+    assert stderr.splitlines() == []
+    assert ret == 0, stdout
+
+
+def test_shared_items_project():
+    solution_file = os.path.join('shared-items-project', 'Solution.sln')
+
+    args = [
+        '--platform=win64',
+        '--project={}'.format(solution_file),
+        '--project-configuration=Release|x64'
+    ]
+
+    exitcode, stdout, stderr = cppcheck(args, cwd=__script_dir)
+    assert exitcode == 0
+
+    # Assume no errors, and that shared items code files have been checked as well
+    assert '2/2 files checked ' in stdout  # only perform partial check since -j2 does not report a percentage right now
+    assert stderr == ''
+
+
+def test_project_file_nested(tmp_path):
+    test_file = tmp_path / 'test.c'
+    with open(test_file, 'wt'):
+        pass
+
+    level3_file = tmp_path / 'level3.cppcheck'
+    with open(level3_file, 'wt') as f:
+        f.write(
+"""<project>
+    <paths>
+        <dir name="{}"/>
+    </paths>
+</project>""".format(test_file))
+
+    level2_file = tmp_path / 'level2.cppcheck'
+    with open(level2_file, 'wt') as f:
+        f.write(
+"""<project>
+    <importproject>level3.cppcheck</importproject>
+</project>""")
+
+    level1_file = tmp_path / 'level1.cppcheck'
+    with open(level1_file, 'wt') as f:
+        f.write(
+"""<project>
+    <importproject>level2.cppcheck</importproject>
+</project>""")
+
+    args = ['--project={}'.format(level1_file)]
+    out_lines = [
+        'cppcheck: error: nested Cppcheck GUI projects are not supported.'
     ]
 
     assert_cppcheck(args, ec_exp=1, err_exp=[], out_exp=out_lines)

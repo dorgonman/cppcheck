@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,6 +37,7 @@ class QPrinter;
 class QSettings;
 class CheckStatistics;
 class QPoint;
+enum class ReportType : std::uint8_t;
 namespace Ui {
     class ResultsView;
 }
@@ -136,7 +137,7 @@ public:
      * @return Directory containing source files
      */
 
-    QString getCheckDirectory();
+    QString getCheckDirectory() const;
 
     /**
      * Set settings used in checking
@@ -216,6 +217,8 @@ public:
      * @return Pointer to Showtypes.
      */
     const ShowTypes & getShowTypes() const;
+
+    void setReportType(ReportType reportType);
 
 signals:
 
@@ -326,7 +329,7 @@ public slots:
      * @brief Slot printing the current report to the printer.
      * @param printer The printer used for printing the report.
      */
-    void print(QPrinter* printer);
+    void print(QPrinter* printer) const;
 
     /**
      * @brief Slot opening a print preview dialog

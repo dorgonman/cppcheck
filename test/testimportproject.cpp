@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,11 +16,12 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "importproject.h"
-#include "settings.h"
 #include "filesettings.h"
 #include "fixture.h"
+#include "importproject.h"
 #include "redirect.h"
+#include "settings.h"
+#include "suppressions.h"
 
 #include <list>
 #include <map>
@@ -62,6 +63,7 @@ private:
         TEST_CASE(importCompileCommands9);
         TEST_CASE(importCompileCommands10); // #10887: include path with space
         TEST_CASE(importCompileCommands11); // include path order
+        TEST_CASE(importCompileCommands12); // #13040: "directory" is parent directory, relative include paths
         TEST_CASE(importCompileCommandsArgumentsSection); // Handle arguments section
         TEST_CASE(importCompileCommandsNoCommandSection); // gracefully handles malformed json
         TEST_CASE(importCppcheckGuiProject);
@@ -69,7 +71,7 @@ private:
     }
 
     void setDefines() const {
-        FileSettings fs{""};
+        FileSettings fs{"test.cpp"};
 
         ImportProject::fsSetDefines(fs, "A");
         ASSERT_EQUALS("A=1", fs.defines);
@@ -85,7 +87,7 @@ private:
     }
 
     void setIncludePaths1() const {
-        FileSettings fs{""};
+        FileSettings fs{"test.cpp"};
         std::list<std::string> in(1, "../include");
         std::map<std::string, std::string, cppcheck::stricmp> variables;
         ImportProject::fsSetIncludePaths(fs, "abc/def/", in, variables);
@@ -94,7 +96,7 @@ private:
     }
 
     void setIncludePaths2() const {
-        FileSettings fs{""};
+        FileSettings fs{"test.cpp"};
         std::list<std::string> in(1, "$(SolutionDir)other");
         std::map<std::string, std::string, cppcheck::stricmp> variables;
         variables["SolutionDir"] = "c:/abc/";
@@ -104,7 +106,7 @@ private:
     }
 
     void setIncludePaths3() const { // macro names are case insensitive
-        FileSettings fs{""};
+        FileSettings fs{"test.cpp"};
         std::list<std::string> in(1, "$(SOLUTIONDIR)other");
         std::map<std::string, std::string, cppcheck::stricmp> variables;
         variables["SolutionDir"] = "c:/abc/";
@@ -319,6 +321,23 @@ private:
         ASSERT_EQUALS("/x/abc/", fs.includePaths.back());
     }
 
+    void importCompileCommands12() const { // #13040
+        REDIRECT;
+        constexpr char json[] =
+            R"([{
+               "file": "/x/src/1.c" ,
+               "directory": "/x",
+               "command": "cc -c -I. src/1.c"
+            }])";
+        std::istringstream istr(json);
+        TestImporter importer;
+        ASSERT_EQUALS(true, importer.importCompileCommands(istr));
+        ASSERT_EQUALS(1, importer.fileSettings.size());
+        const FileSettings &fs = importer.fileSettings.front();
+        ASSERT_EQUALS(1, fs.includePaths.size());
+        ASSERT_EQUALS("/x/", fs.includePaths.front());
+    }
+
     void importCompileCommandsArgumentsSection() const {
         REDIRECT;
         constexpr char json[] = "[ { \"directory\": \"/tmp/\","
@@ -358,16 +377,19 @@ private:
                                "    <exclude>\n"
                                "        <path name=\"gui/temp/\"/>\n"
                                "    </exclude>\n"
+                               "    <inline-suppression>true</inline-suppression>\n"
                                "    <project-name>test test</project-name>\n"
                                "</project>\n";
         std::istringstream istr(xml);
         Settings s;
+        Suppressions supprs;
         TestImporter project;
-        ASSERT_EQUALS(true, project.importCppcheckGuiProject(istr, &s));
+        ASSERT_EQUALS(true, project.importCppcheckGuiProject(istr, s, supprs));
         ASSERT_EQUALS(1, project.guiProject.pathNames.size());
         ASSERT_EQUALS("cli/", project.guiProject.pathNames[0]);
         ASSERT_EQUALS(1, s.includePaths.size());
         ASSERT_EQUALS("lib/", s.includePaths.front());
+        ASSERT_EQUALS(true, s.inlineSuppressions);
     }
 
     void ignorePaths() const {

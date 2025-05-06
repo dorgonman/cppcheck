@@ -19,26 +19,37 @@
 #include "settings.h"
 #include "fixture.h"
 #include "helpers.h"
+#include "path.h"
 #include "platform.h"
+#include "preprocessor.h"
 #include "standards.h"
 #include "token.h"
 #include "tokenlist.h"
 
 #include <sstream>
+#include <stack>
 #include <string>
+#include <utility>
+#include <vector>
+
+#include <simplecpp.h>
 
 class TestTokenList : public TestFixture {
 public:
-    TestTokenList() : TestFixture("TestTokenList") {}
+    TestTokenList() : TestFixture("TestTokenList") {
+        settings.enforcedLang = Standards::Language::C;
+    }
 
 private:
-    const Settings settings;
+    /*const*/ Settings settings;
 
     void run() override {
         TEST_CASE(testaddtoken1);
         TEST_CASE(testaddtoken2);
         TEST_CASE(inc);
         TEST_CASE(isKeyword);
+        TEST_CASE(notokens);
+        TEST_CASE(ast1);
     }
 
     // inspired by #5895
@@ -51,7 +62,7 @@ private:
 
     void testaddtoken2() const {
         const std::string code = "0xF0000000";
-        /*const*/ Settings settings1;
+        /*const*/ Settings settings1 = settings;
         settings1.platform.int_bit = 32;
         TokenList tokenlist(&settings1);
         tokenlist.addtoken(code, 1, 1, false);
@@ -119,7 +130,8 @@ private:
             const Settings s = settingsBuilder().c(Standards::C89).build();
             TokenList tokenlist(&s);
             std::istringstream istr(code2);
-            ASSERT(tokenlist.createTokens(istr, "a.c"));
+            tokenlist.appendFileIfNew("a.c");
+            ASSERT(tokenlist.createTokens(istr, Path::identify("a.c", false)));
             ASSERT_EQUALS(false, tokenlist.front()->isKeyword());
         }
 
@@ -140,9 +152,47 @@ private:
             const Settings s = settingsBuilder().cpp(Standards::CPP03).build();
             TokenList tokenlist(&s);
             std::istringstream istr(code2);
-            ASSERT(tokenlist.createTokens(istr, "a.cpp"));
+            tokenlist.appendFileIfNew("a.cpp");
+            ASSERT(tokenlist.createTokens(istr, Path::identify("a.cpp", false)));
             ASSERT_EQUALS(false, tokenlist.front()->isKeyword());
         }
+    }
+
+    void notokens() {
+        // analyzing /usr/include/poll.h caused Path::identify() to be called with an empty filename from
+        // TokenList::determineCppC() because there are no tokens
+        const char code[] = "#include <sys/poll.h>";
+        std::istringstream istr(code);
+        std::vector<std::string> files;
+        simplecpp::TokenList tokens1(istr, files, "poll.h", nullptr);
+        Preprocessor preprocessor(settingsDefault, *this);
+        simplecpp::TokenList tokensP = preprocessor.preprocess(tokens1, "", files, true);
+        TokenList tokenlist(&settingsDefault);
+        tokenlist.createTokens(std::move(tokensP)); // do not assert
+    }
+
+    void ast1() const {
+        const std::string s = "('Release|x64' == 'Release|x64');";
+
+        TokenList tokenlist(&settings);
+        std::istringstream istr(s);
+        ASSERT(tokenlist.createTokens(istr, Standards::Language::C));
+        // TODO: put this logic in TokenList
+        // generate links
+        {
+            std::stack<Token*> lpar;
+            for (Token* tok2 = tokenlist.front(); tok2; tok2 = tok2->next()) {
+                if (tok2->str() == "(")
+                    lpar.push(tok2);
+                else if (tok2->str() == ")") {
+                    if (lpar.empty())
+                        break;
+                    Token::createMutualLinks(lpar.top(), tok2);
+                    lpar.pop();
+                }
+            }
+        }
+        tokenlist.createAst(); // do not crash
     }
 };
 

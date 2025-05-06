@@ -2,12 +2,14 @@
 // Test library configuration for gnu.cfg
 //
 // Usage:
-// $ cppcheck --check-library --library=gnu --enable=style,information --inconclusive --error-exitcode=1 --disable=missingInclude --inline-suppr test/cfg/gnu.c
+// $ cppcheck --check-library --library=gnu --enable=style,information --inconclusive --error-exitcode=1 --inline-suppr test/cfg/gnu.c
 // =>
 // No warnings about bad library configuration, unmatched suppressions, etc. exitcode=0
 //
 
-// cppcheck-suppress-file valueFlowBailout
+// cppcheck-suppress-file [valueFlowBailout,purgedConfiguration]
+
+#define _GNU_SOURCE
 
 #include <string.h>
 #include <stdlib.h>
@@ -21,15 +23,20 @@
 #include <sys/mman.h>
 #include <sys/sem.h>
 #include <wchar.h>
-#if !defined(__CYGWIN__) && !(defined(__APPLE__) && defined(__MACH__))
+#include <execinfo.h>
+#if !defined(__CYGWIN__) && !defined(__APPLE__)
 #include <sys/epoll.h>
 #endif
 #include <strings.h>
 #ifdef __gnu_linux__
 #include <error.h>
 #endif
+#include <unistd.h>
 #include <getopt.h>
 #include <netdb.h>
+#if !defined(__APPLE__)
+#include <byteswap.h>
+#endif
 
 #ifdef __gnu_linux__
 void unreachableCode_error(void) // #11197
@@ -40,6 +47,42 @@ void unreachableCode_error(void) // #11197
     int i;
 }
 #endif
+
+
+int deallocuse_backtrace(int size) {
+    void **buffer = (void **)malloc(sizeof(void *) * size);
+    free(buffer);
+    // cppcheck-suppress deallocuse
+    // cppcheck-suppress nullPointerOutOfMemory
+    int numEntries = backtrace(buffer, size);
+    return numEntries;
+}
+
+void leakReturnValNotUsed_get_current_dir_name(void)
+{
+    // cppcheck-suppress leakReturnValNotUsed
+    get_current_dir_name();
+}
+
+void memleak_get_current_dir_name0(void)
+{
+    const char *const name = get_current_dir_name();
+    if (name)
+    {
+        // cppcheck-suppress memleak
+        return;
+    }
+}
+
+void memleak_get_current_dir_name1(void)
+{
+    const char *const name = get_current_dir_name();
+    if (name)
+    {
+        free(name);
+        return;
+    }
+}
 
 int nullPointer_gethostbyname2_r(const char* name, int af, struct hostent* ret, const char* buf, size_t buflen, struct hostent** result, const int* h_errnop)
 {
@@ -289,6 +332,7 @@ void valid_code(int argInt1, va_list valist_arg, const int * parg)
     // cppcheck-suppress valueFlowBailoutIncompleteVar
     const void * p_mmap = mmap(NULL, 1, PROT_NONE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
     printf("%p", p_mmap);
+    // cppcheck-suppress nullPointerOutOfMemory
     munmap(p_mmap, 1);
 
     uint16_t i16_1 = 0, i16_2;
@@ -301,6 +345,7 @@ void valid_code(int argInt1, va_list valist_arg, const int * parg)
     // cppcheck-suppress unreadVariable
     i64_2 = __builtin_bswap64(i64_1++);
 
+#if !defined(__APPLE__)
     // cppcheck-suppress zerodiv
     // cppcheck-suppress unreadVariable
     i16_1 /= bswap_16(0x1234) - 0x3412;
@@ -310,6 +355,7 @@ void valid_code(int argInt1, va_list valist_arg, const int * parg)
     // cppcheck-suppress zerodiv
     // cppcheck-suppress unreadVariable
     i64_1 /= bswap_64(0x023456789abcde0f) - 0x0fdebc9a78563402;
+#endif
 }
 
 void ignoreleak(void)
@@ -383,6 +429,7 @@ void memleak_asprintf8(const char *fmt, const int arg) // #12204
 void memleak_xmalloc()
 {
     char *p = (char*)xmalloc(10);
+    // cppcheck-suppress nullPointerOutOfMemory
     p[9] = 0;
     // cppcheck-suppress memleak
 }
@@ -420,14 +467,18 @@ void bufferAccessOutOfBounds()
     sethostname(buf, 4);
 
     char * pAlloc1 = xcalloc(2, 4);
+    // cppcheck-suppress nullPointerOutOfMemory
     memset(pAlloc1, 0, 8);
     // cppcheck-suppress bufferAccessOutOfBounds
+    // cppcheck-suppress nullPointerOutOfMemory
     memset(pAlloc1, 0, 9);
     free(pAlloc1);
 
     char * pAlloc2 = xmalloc(4);
+    // cppcheck-suppress nullPointerOutOfMemory
     memset(pAlloc2, 0, 4);
     // cppcheck-suppress bufferAccessOutOfBounds
+    // cppcheck-suppress nullPointerOutOfMemory
     memset(pAlloc2, 0, 5);
 
     pAlloc2 = xrealloc(pAlloc2, 10);
@@ -458,7 +509,7 @@ void leakReturnValNotUsed()
         return;
 }
 
-#if !defined(__CYGWIN__) && !(defined(__APPLE__) && defined(__MACH__))
+#if !defined(__CYGWIN__) && !defined(__APPLE__)
 int nullPointer_epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
 {
     // no warning is expected

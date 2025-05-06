@@ -1,6 +1,6 @@
 /*
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2023 Cppcheck team.
+ * Copyright (C) 2007-2024 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -150,7 +150,7 @@ bool Platform::set(Type t)
     return false;
 }
 
-bool Platform::set(const std::string& platformstr, std::string& errstr, const std::vector<std::string>& paths, bool verbose)
+bool Platform::set(const std::string& platformstr, std::string& errstr, const std::vector<std::string>& paths, bool debug)
 {
     if (platformstr == "win32A")
         set(Type::Win32A);
@@ -173,9 +173,9 @@ bool Platform::set(const std::string& platformstr, std::string& errstr, const st
     else {
         bool found = false;
         for (const std::string& path : paths) {
-            if (verbose)
+            if (debug)
                 std::cout << "looking for platform '" + platformstr + "' in '" + path + "'" << std::endl;
-            if (loadFromFile(path.c_str(), platformstr, verbose)) {
+            if (loadFromFile(path.c_str(), platformstr, debug)) {
                 found = true;
                 break;
             }
@@ -189,7 +189,7 @@ bool Platform::set(const std::string& platformstr, std::string& errstr, const st
     return true;
 }
 
-bool Platform::loadFromFile(const char exename[], const std::string &filename, bool verbose)
+bool Platform::loadFromFile(const char exename[], const std::string &filename, bool debug)
 {
     // TODO: only append .xml if missing
     // TODO: use native separators
@@ -216,15 +216,15 @@ bool Platform::loadFromFile(const char exename[], const std::string &filename, b
     tinyxml2::XMLDocument doc;
     bool success = false;
     for (const std::string & f : filenames) {
-        if (verbose)
+        if (debug)
             std::cout << "try to load platform file '" << f << "' ... ";
         if (doc.LoadFile(f.c_str()) == tinyxml2::XML_SUCCESS) {
-            if (verbose)
+            if (debug)
                 std::cout << "Success" << std::endl;
             success = true;
             break;
         }
-        if (verbose)
+        if (debug)
             std::cout << doc.ErrorStr() << std::endl;
     }
     if (!success)
@@ -250,37 +250,39 @@ bool Platform::loadFromXmlDocument(const tinyxml2::XMLDocument *doc)
 
     bool error = false;
     for (const tinyxml2::XMLElement *node = rootnode->FirstChildElement(); node; node = node->NextSiblingElement()) {
-        if (std::strcmp(node->Name(), "default-sign") == 0) {
+        const char* name = node->Name();
+        if (std::strcmp(name, "default-sign") == 0) {
             const char* str = node->GetText();
             if (str)
                 defaultSign = *str;
             else
                 error = true;
-        } else if (std::strcmp(node->Name(), "char_bit") == 0)
+        } else if (std::strcmp(name, "char_bit") == 0)
             char_bit = xmlTextAsUInt(node, error);
-        else if (std::strcmp(node->Name(), "sizeof") == 0) {
+        else if (std::strcmp(name, "sizeof") == 0) {
             for (const tinyxml2::XMLElement *sz = node->FirstChildElement(); sz; sz = sz->NextSiblingElement()) {
-                if (std::strcmp(sz->Name(), "short") == 0)
+                const char* szname = sz->Name();
+                if (std::strcmp(szname, "short") == 0)
                     sizeof_short = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(sz->Name(), "bool") == 0)
+                else if (std::strcmp(szname, "bool") == 0)
                     sizeof_bool = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(sz->Name(), "int") == 0)
+                else if (std::strcmp(szname, "int") == 0)
                     sizeof_int = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(sz->Name(), "long") == 0)
+                else if (std::strcmp(szname, "long") == 0)
                     sizeof_long = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(sz->Name(), "long-long") == 0)
+                else if (std::strcmp(szname, "long-long") == 0)
                     sizeof_long_long = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(sz->Name(), "float") == 0)
+                else if (std::strcmp(szname, "float") == 0)
                     sizeof_float = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(sz->Name(), "double") == 0)
+                else if (std::strcmp(szname, "double") == 0)
                     sizeof_double = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(sz->Name(), "long-double") == 0)
+                else if (std::strcmp(szname, "long-double") == 0)
                     sizeof_long_double = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(sz->Name(), "pointer") == 0)
+                else if (std::strcmp(szname, "pointer") == 0)
                     sizeof_pointer = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(sz->Name(), "size_t") == 0)
+                else if (std::strcmp(szname, "size_t") == 0)
                     sizeof_size_t = xmlTextAsUInt(sz, error);
-                else if (std::strcmp(sz->Name(), "wchar_t") == 0)
+                else if (std::strcmp(szname, "wchar_t") == 0)
                     sizeof_wchar_t = xmlTextAsUInt(sz, error);
             }
         }
@@ -327,24 +329,24 @@ std::string Platform::getLimitsDefines(bool c99) const
     s += ";USHRT_MAX=";
     s += std::to_string(max_value(short_bit+1));
     s += ";INT_MIN=";
-    s += std::to_string(min_value(int_bit));
+    s += "(-" + std::to_string(max_value(int_bit)) + " - 1)";
     s += ";INT_MAX=";
     s += std::to_string(max_value(int_bit));
     s += ";UINT_MAX=";
     s += std::to_string(max_value(int_bit+1));
     s += ";LONG_MIN=";
-    s += std::to_string(min_value(long_bit));
+    s += "(-" + std::to_string(max_value(long_bit)) + "L - 1L)";
     s += ";LONG_MAX=";
-    s += std::to_string(max_value(long_bit));
+    s += std::to_string(max_value(long_bit)) + "L";
     s += ";ULONG_MAX=";
-    s += std::to_string(max_value(long_bit+1));
+    s += std::to_string(max_value_unsigned(long_bit)) + "UL";
     if (c99) {
         s += ";LLONG_MIN=";
-        s += std::to_string(min_value(long_long_bit));
+        s += "(-" + std::to_string(max_value(long_long_bit)) + "LL - 1LL)";
         s += ";LLONG_MAX=";
-        s += std::to_string(max_value(long_long_bit));
+        s += std::to_string(max_value(long_long_bit)) + "LL";
         s += ";ULLONG_MAX=";
-        s += std::to_string(max_value(long_long_bit + 1));
+        s += std::to_string(max_value_unsigned(long_long_bit)) + "ULL";
     }
 
     // cstdint / stdint.h

@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -52,12 +52,12 @@ public:
     // * What functions are declared
     void parseTokens(const Tokenizer &tokenizer, const Settings &settings);
 
-    std::string analyzerInfo() const;
+    std::string analyzerInfo(const Tokenizer &tokenizer) const;
 
     static void analyseWholeProgram(const Settings &settings, ErrorLogger& errorLogger, const std::string &buildDir);
 
     static void getErrorMessages(ErrorLogger &errorLogger) {
-        unusedFunctionError(errorLogger, emptyString, 0, 0, "funcName");
+        unusedFunctionError(errorLogger, "", 0, 0, "funcName");
     }
 
     // Return true if an error is reported.
@@ -76,6 +76,8 @@ private:
         unsigned int fileIndex{};
         bool usedSameFile{};
         bool usedOtherFile{};
+        bool isC{};
+        bool isStatic{};
     };
 
     std::unordered_map<std::string, FunctionUsage> mFunctions;
@@ -84,6 +86,7 @@ private:
     public:
         explicit FunctionDecl(const Function *f);
         std::string functionName;
+        nonneg int fileIndex;
         unsigned int lineNumber;
     };
     std::list<FunctionDecl> mFunctionDecl;

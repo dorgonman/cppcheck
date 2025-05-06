@@ -1,6 +1,6 @@
-/*
+/* -*- C++ -*-
  * Cppcheck - A tool for static C/C++ code analysis
- * Copyright (C) 2007-2024 Cppcheck team.
+ * Copyright (C) 2007-2025 Cppcheck team.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,7 @@
 
 #include "config.h"
 
+#include <cstdint>
 #include <ctime>
 #include <list>
 #include <map>
@@ -77,7 +78,7 @@ public:
         const Token *mParamEnd;
         unsigned int mFlags;
 
-        enum {
+        enum : std::uint16_t {
             fIsClass                 = (1 << 0), // class template
             fIsFunction              = (1 << 1), // function template
             fIsVariable              = (1 << 2), // variable template
@@ -269,7 +270,7 @@ public:
      * @param patternAfter pattern that must match the tokens after the ">"
      * @return match => true
      */
-    static bool instantiateMatch(const Token *instance, const std::size_t numberOfArguments, bool variadic, const char patternAfter[]);
+    static bool instantiateMatch(const Token *instance, std::size_t numberOfArguments, bool variadic, const char patternAfter[]);
 
     /**
      * Match template declaration/instantiation
@@ -307,7 +308,7 @@ public:
      * Simplify templates
      * @param maxtime time when the simplification should be stopped
      */
-    void simplifyTemplates(const std::time_t maxtime);
+    void simplifyTemplates(std::time_t maxtime);
 
     /**
      * Simplify constant calculations such as "1+2" => "3"
@@ -395,7 +396,7 @@ private:
     bool simplifyTemplateInstantiations(
         const TokenAndName &templateDeclaration,
         const std::list<const Token *> &specializations,
-        const std::time_t maxtime,
+        std::time_t maxtime,
         std::set<std::string> &expandedtemplates);
 
     /**
@@ -489,7 +490,7 @@ private:
     void printOut(
         const TokenAndName &tokenAndName,
         const std::string &indent = "    ") const;
-    void printOut(const std::string &text = emptyString) const;
+    void printOut(const std::string &text = "") const;
 
     Tokenizer &mTokenizer;
     TokenList &mTokenList;

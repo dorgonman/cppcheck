@@ -1,8 +1,9 @@
 # **Cppcheck** 
 
-OSS-Fuzz|Coverity Scan Build Status|License|
-|:--:|:--:|:--:|
-[![OSS-Fuzz](https://oss-fuzz-build-logs.storage.googleapis.com/badges/cppcheck.svg)](https://bugs.chromium.org/p/oss-fuzz/issues/list?sort=-opened&can=1&q=proj:cppcheck)|[![Coverity Scan Build Status](https://img.shields.io/coverity/scan/512.svg)](https://scan.coverity.com/projects/512)|[![License](https://img.shields.io/badge/license-GPL3.0-blue.svg)](https://opensource.org/licenses/GPL-3.0) 
+|release-windows|OSS-Fuzz|Coverity Scan Build Status|include-what-you-use|License|
+|:--:|:--:|:--:|:--:|:--:|
+|[![release-windows](https://github.com/danmar/cppcheck/actions/workflows/release-windows.yml/badge.svg?branch=main)](https://github.com/danmar/cppcheck/actions/workflows/release-windows.yml)|[![OSS-Fuzz](https://oss-fuzz-build-logs.storage.googleapis.com/badges/cppcheck.svg)](https://bugs.chromium.org/p/oss-fuzz/issues/list?sort=-opened&can=1&q=proj:cppcheck)|[![Coverity Scan Build Status](https://img.shields.io/coverity/scan/512.svg)](https://scan.coverity.com/projects/512)|[![include-what-you-use](https://github.com/danmar/cppcheck/actions/workflows/iwyu.yml/badge.svg?branch=main)](https://github.com/danmar/cppcheck/actions/workflows/iwyu.yml)|[![License](https://img.shields.io/badge/license-GPL3.0-blue.svg)](https://opensource.org/licenses/GPL-3.0)
+
 
 ## About the name
 
@@ -19,7 +20,13 @@ A manual is available [online](https://cppcheck.sourceforge.io/manual.pdf).
 Cppcheck is a hobby project with limited resources. You can help us by donating CPU (1 core or as many as you like). It is simple:
 
  1. Download (and extract) Cppcheck source code.
- 2. Run script: `python cppcheck/tools/donate-cpu.py`.
+ 2. Run:
+    ```
+    cd cppcheck/
+    virtualenv .env
+    .env/bin/pip install -r tools/donate-cpu-requirements.txt
+    .env/bin/python tools/donate-cpu.py
+    ```
 
 The script will analyse debian source code and upload the results to a cppcheck server. We need these results both to improve Cppcheck and to detect regressions.
 
@@ -29,12 +36,11 @@ You can stop the script whenever you like with Ctrl C.
 
 Cppcheck requires a C++ compiler with (partial) C++11 support. Minimum required versions are GCC 5.1 / Clang 3.5 / Visual Studio 2015.
 
-To build the GUI application, you need to use the CMake or qmake (deprecated) build system.
+To build the GUI application, you need to use the CMake build system.
 
 When building the command line tool, [PCRE](http://www.pcre.org/) is optional. It is used if you build with rules.
 
 There are multiple compilation choices:
-* qmake - cross platform build tool (deprecated)
 * CMake - cross platform build tool
 * Windows: Visual Studio
 * Windows: Qt Creator + MinGW
@@ -42,9 +48,11 @@ There are multiple compilation choices:
 * GCC (g++)
 * Clang (clang++)
 
+The minimum required Python version is 3.6.
+
 ### CMake
 
-The minimum required version is CMake 3.5.
+The minimum required version is CMake 3.13.
 
 Example, compiling Cppcheck with cmake:
 
@@ -87,18 +95,6 @@ mkdir build
 cd build
 cmake ..
 cmake --build . --config RelWithDebInfo
-```
-
-### qmake
-
-NOTE: This has been deprecated and will be removed in a future version. Please use CMake instead.
-
-You can use the gui/gui.pro file to build the GUI.
-
-```shell
-cd gui
-qmake
-make
 ```
 
 ### Visual Studio
@@ -262,13 +258,33 @@ mv cppcheck cppcheck.exe
 ## Packages
 
 Besides building yourself on the platform of your choice there are also several ways to obtain pre-built packages.<br/>
-*Note:* The non-Windows packages are not maintained by the Cppcheck team but by the respective packagers instead.
 
-- (Windows) An official Windows installer is available via the official Cppcheck SourceForge page: https://cppcheck.sourceforge.io/.
-- (Linux/Unix) Many major distros offer Cppcheck packages via their integrated package managers (`yum`, `apt`, `pacman`, etc.). See https://pkgs.org/search/?q=cppcheck for an overview.
-- (Linux/Unix) Unless you are using a "rolling" distro, it is likely that they are not carrying the latest version. There are several external (mainly unsupported) repositories like AUR (ArchLinux), PPA (ubuntu), EPEL (CentOS/Fedora) etc. which provide up-to-date packages. 
-- (Linux/Unix) The Canonical Snapcraft package is unmaintained and contains a very old version. Please refrain from using it! See https://trac.cppcheck.net/ticket/11641 for more details.
-- (MacOS) A package is available via Homebrew (`brew`). See https://formulae.brew.sh/formula/cppcheck#default.
+Official packages maintained by the Cppcheck team:
+- (Windows) An official Windows installer is available via the official Cppcheck SourceForge page: https://cppcheck.sourceforge.io.
+- (Windows) Official builds of the current development versions are available via the [release-windows](https://github.com/danmar/cppcheck/actions/workflows/release-windows.yml) workflow. They are built nightly for the `main` branch and for each commit for release branches. As these are development versions please refrain from using these in production environments!
+  - A portable package (i.e. does not require installation) is available as the `portable` artifact. This is still a work-in-progress - see https://trac.cppcheck.net/ticket/10771 for details.
+  - An installer is available via the `installer` artifact.
+- (Multi-Platform) A premium version with additional features provided by the original author of Cppcheck is available for purchase via https://www.cppcheck.com.
+
+Unofficial packages *not* maintained by the Cppcheck team but their respective packagers:
+- (Windows / Outdated) A portable package is available via https://portableapps.com/apps/development/cppcheck-portable.
+- (Windows / Outdated) A package is available via https://community.chocolatey.org/packages/cppcheck.
+- (Windows / Outdated) A package is available via https://winget.run/pkg/Cppcheck/Cppcheck.
+- (Windows / Outdated) A package is available via https://osdn.net/projects/sfnet_cppcheck.
+- (Windows) A package is available via https://scoop.sh/#/apps?q=cppcheck.
+- (Linux/Unix) Many major distros offer Cppcheck packages via their integrated package managers (`yum`, `apt`, `pacman`, etc.). See https://pkgs.org/search/?q=cppcheck or https://repology.org/project/cppcheck for an overview.
+- (Linux/Unix) Unless you are using a "rolling" distro, it is likely that they are not carrying the latest version. There are several external (mainly unsupported) repositories like AUR (ArchLinux), PPA (ubuntu), EPEL (CentOS/Fedora) etc. which might provide up-to-date packages. 
+- (Linux/Unix / Outdated) The Canonical Snapcraft packages (https://snapcraft.io/cppcheck / https://snapcraft.io/cppcheckgui) are unmaintained and contain very old (development) versions. Please refrain from using them! See https://trac.cppcheck.net/ticket/11641 for more details.
+- (MacOS) A package is available via Homebrew (`brew`). See https://formulae.brew.sh/formula/cppcheck.
+- (MacOS) A package is available via https://ports.macports.org/port/cppcheck
+- (Multi-Platform) A package is available via https://anaconda.org/conda-forge/cppcheck.
+- Packages are also available from various download portals (mainly the Windows installer - sometimes re-packaged).
+
+*Note:* This is list is purely informational and listed in no particular order.
+
+*Note:* Please always try to obtain the package from the primary official source of your operating system/distro first and make sure you are getting the latest released version.
+
+*Note:* Some issues might be related to additional patches carried by the builds in these packages or the packaging itself. In that case issues might need to be reported to the respective project.
 
 ## Webpage
 
